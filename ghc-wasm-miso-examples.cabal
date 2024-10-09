@@ -7,12 +7,22 @@ executable ghc-wasm-miso-examples
     build-depends:
       , aeson
       , base
+      , base64
+      , bytestring
       , containers
+      , directory
+      , extra
+      , filepath
+      , FontyFruity
       , hs2048
       , jsaddle
+      , JuicyPixels
       , miso
       , mtl
+      , picture-click-from-svg
+      , pretty-simple
       , random
+      , svg-tree
       , text
     hs-source-dirs: app
     default-language: GHC2021
@@ -20,6 +30,7 @@ executable ghc-wasm-miso-examples
     ghc-options: -Wall -Wunused-packages -Wno-name-shadowing -Wredundant-constraints
     other-modules:
       App
+      PictureClickFromSvg
       SimpleCounter
       Snake
       TodoMVC
@@ -29,3 +40,5 @@ executable ghc-wasm-miso-examples
       ghc-options: -no-hs-main -optl-mexec-model=reactor "-optl-Wl,--export=hs_start"
     else
       build-depends: jsaddle-warp, warp, websockets
+        , http-client
+        , http-client-tls
