@@ -2,6 +2,13 @@ packages: . hs2048
 
 index-state: 2024-10-26T13:27:42Z
 
+if impl(ghc >= 9.10)
+  -- https://github.com/protolude/protolude/pull/150
+  source-repository-package
+    type: git
+    location: https://github.com/tomjaguarpaw/protolude
+    tag: 57ffd726d9685a862df8c9773f3eb09de2b89594
+
 if arch(wasm32)
   -- Required for TemplateHaskell. When using wasm32-wasi-cabal from
   -- ghc-wasm-meta, this is superseded by the global cabal.config.
@@ -18,5 +25,22 @@ if arch(wasm32)
     location: https://github.com/amesgen/splitmix
     tag: 5f5b766d97dc735ac228215d240a3bb90bc2ff75
 
+  -- https://github.com/cdepillabout/pretty-simple/pull/107
+  source-repository-package
+    type: git
+    location: https://github.com/cdepillabout/pretty-simple
+    tag: 6fb9b281800ad045925c7344ceb9fd293d86c3b9
+
+-- Not on Hackage.
+source-repository-package
+  type: git
+  location: https://github.com/hackworthltd/primer
+  tag: 9859f0a5152a3d3136b4b895c91b46874e061b6d
+  subdir: primer
+
 package aeson
   flags: -ordered-keymap
+
+constraints:
+  -- https://github.com/dmjio/miso/pull/752
+  text==2.1.1,

@@ -9,6 +9,7 @@ import Language.Javascript.JSaddle (JSM)
 import Language.Javascript.JSaddle
 #endif
 
+import Primer qualified
 import SimpleCounter qualified
 import Snake qualified
 import TodoMVC qualified
@@ -20,6 +21,7 @@ start e =
   case fromJSString e :: String of
     "simplecounter" -> SimpleCounter.start
     "snake" -> Snake.start
+    "primer" -> Primer.start
     "todomvc" -> TodoMVC.start
     "xhr" -> XHR.start
     "2048" -> TwoZeroFourEight.start
