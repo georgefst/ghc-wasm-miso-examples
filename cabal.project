@@ -20,3 +20,74 @@ if arch(wasm32)
 
 package aeson
   flags: -ordered-keymap
+
+allow-newer:
+  -- TODO this ideally shouldn't even be in the closure given we only want the core Primer library
+  -- well actually, when exactly does Primer write to DB and what do we want to do about it in WASM?
+  selda:*,
+  -- TODO this is only used for Primer tests - why does the Nix shell want to build it?
+  hedgehog:pretty-show,
+
+source-repository-package
+  type: git
+  location: https://github.com/hackworthltd/primer
+  tag: 9859f0a5152a3d3136b4b895c91b46874e061b6d
+  subdir: primer
+
+-- Copied from Primer (omitting `splitmix`, which already has a more up-to-date version specified above):
+
+-- Protolude upstream doesn't support GHC 9.10, and appears to
+-- be dormant.
+source-repository-package
+  type: git
+  location: https://github.com/tomjaguarpaw/protolude
+  tag: 57ffd726d9685a862df8c9773f3eb09de2b89594
+  --sha256: 1z9z887s4f1wv0pv3njyd8h8zgr2ha89jyvaxz3k5k3rk6h2g1cp
+
+-- We need a newer version of Selda than what's been released to
+-- Hackage, plus some GHC 9.6 fixes from a community fork.
+source-repository-package
+  type: git
+  location: https://github.com/novadiscovery/selda
+  tag: 2e3dc54d7de8365b3be84da76f08327dc8b40f61
+  subdir: selda
+  --sha256: 0fw336sb03sc54pzmkz6jn989zvbnwnzypb9n0ackprymnvh8mym
+
+source-repository-package
+  type: git
+  location: https://github.com/novadiscovery/selda
+  tag: 2e3dc54d7de8365b3be84da76f08327dc8b40f61
+  subdir: selda-sqlite
+  --sha256: 0fw336sb03sc54pzmkz6jn989zvbnwnzypb9n0ackprymnvh8mym
+
+-- Wasm workarounds.
+--
+-- We would prefer that these workarounds were not Wasm-dependent;
+-- i.e., that we would use the same version of these dependencies
+-- whether we're building for Wasm or not. However, we *do* make them
+-- Wasm-dependent, because haskell.nix cannot build any of these
+-- source-repository-package dependencies, *nor their reverse
+-- dependencies*, using Nix while in the Nix development shell.
+
+if arch(wasm32)
+  -- Upstream requires `happy` at build time, which doesn't work on Wasm
+  -- targets.
+  source-repository-package
+    type: git
+    location: https://github.com/hackworthltd/pretty-show
+    tag: 91d119cb0e3c5f7d866589b25158739580c8fc88
+    --sha256: sha256-mu8Eq0Sg6nCF8C2sXB6ebZcLhz8TVZAbNMiorA7RVc8=
+
+  -- Upstream supports Wasm, but not yet released to Hackage.
+  source-repository-package
+    type: git
+    location: https://github.com/chessai/semirings
+    tag: 2631c542b57abc9bc9e92db273ab8e80ae88048c
+    --sha256: sha256-M6zLBUjVFacCyDm4oxjQ0gVn1J0BmKWOy3MFfUzWJN8=
+
+  -- Upstream uses custom setup, which breaks on Wasm.
+  source-repository-package
+    type: git
+    location: https://github.com/cdepillabout/pretty-simple
+    tag: 6fb9b281800ad045925c7344ceb9fd293d86c3b9
+    --sha256: sha256-1gsYj/iznEUCeQ1f5Xk7w54h9FLJSNrIR9V3p4eaRYk=
