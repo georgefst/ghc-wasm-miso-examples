@@ -1,3 +1,11 @@
+-- TODO this is vendored from `diagrams-contrib` to avoid incurring a massive dependency tree featuring TemplateHaskell
+-- https://hackage.haskell.org/package/diagrams-contrib-1.4.5.1/docs/Diagrams-TwoD-Layout-Tree.html
+-- could we actually just use the `force-layout` library directly instead? still relies on `linear`, which uses TH...
+-- indeed we've ended up removing the force-layout code below completely in favour of the much-simpler symmetric layout
+-- other possible layout algorithms (in the long run, maybe port Tidy from Rust, and add proper right-edge support):
+-- https://crypto.stanford.edu/~blynn/haskell/eades.html
+-- https://citeseerx.ist.psu.edu/document?repid=rep1&type=pdf&doi=31c3d808e53e61bee0427dde78cbcb8f576ba2c9
+-- https://hackage.haskell.org/package/graphviz-2999.20.2.0/docs/Data-GraphViz.html#t:DotGraph
 {-# LANGUAGE DeriveFoldable            #-}
 {-# LANGUAGE DeriveFunctor             #-}
 {-# LANGUAGE DeriveTraversable         #-}
@@ -6,56 +14,25 @@
 {-# LANGUAGE ScopedTypeVariables       #-}
 {-# LANGUAGE TemplateHaskell           #-}
 {-# LANGUAGE TypeFamilies              #-}
+{-# OPTIONS_GHC -Wno-unused-imports #-}
 module Layout
-       ( -- * Binary trees
-         -- $BTree
-
-         BTree(..)
-       , leaf
-
-         -- * Layout algorithms
-
-         -- ** Unique-x layout
-
-       , uniqueXLayout
-
-         -- ** Radial layout
-
-       , radialLayout
+       ( -- * Layout algorithms
 
          -- ** Symmetric layout
 
          -- $symmetric
-       , symmLayout
+         symmLayout
        , symmLayout'
-       , symmLayoutBin
-       , symmLayoutBin'
        , SymmLayoutOpts(..), slHSep, slVSep, slWidth, slHeight
 
-         -- ** Force-directed layout
-         -- $forcedirected
-
-       , forceLayoutTree
-       , forceLayoutTree'
-       , ForceLayoutTreeOpts(..), forceLayoutOpts, edgeLen, springK, staticK
-
-       , treeToEnsemble
-       , label
-       , reconstruct
-
-         -- * Rendering
-
-       , renderTree
-       , renderTree'
+       , P2(..)
+       , Default(..)
 
        ) where
-
-import           Physics.ForceLayout
 
 import           Control.Arrow       (first, second, (&&&), (***))
 import           Control.Monad.State
 
-import           Data.Default
 import qualified Data.Foldable       as F
 import           Data.Function       (on)
 import           Data.List           (mapAccumL)
@@ -64,10 +41,39 @@ import           Data.Maybe
 import qualified Data.Traversable    as T
 import           Data.Tree
 
-import           Control.Lens        (makeLenses, view, (+=), (-=), (^.))
-import           Diagrams
-import           Linear              ((*^))
-import           Linear.Affine
+import Optics.TH (makeLenses)
+import Optics hiding (Empty)
+
+data P2 a = P2 a a deriving (Eq, Show, Functor)
+-- p2 :: (a, a) -> P2 a
+-- p2 (x,y) = P2 x y
+origin :: Num a => P2 a
+origin = P2 0 0
+
+class Default a where
+    def :: a
+-- instance Default () where
+--     def = ()
+
+-- (+=) :: Num a => Lens' s a -> a -> State s ()
+-- l += x = modify $ over l (+ x)
+-- (-=) :: Num a => Lens' s a -> a -> State s ()
+-- l -= x = modify $ over l (- x)
+
+-- from `linear`
+unitX :: (Num n) => P2 n
+unitX = P2 1 0
+-- unit_X :: Num n => P2 n
+-- unit_X = P2 -1 0
+-- unitY :: Num n => P2 n
+-- unitY = P2 0 1
+unit_Y :: Num n => P2 n
+unit_Y = P2 0 -1
+(*^) :: Num a => a -> P2 a -> P2 a
+(*^) a = fmap (a *)
+(.+^) :: Num a => P2 a -> P2 a -> P2 a
+-- P2 x1 y1 .+^ P2 x2 y2 = P2 (x1 - y1) (x2 - y2)
+P2 x1 y1 .+^ P2 x2 y2 = P2 (x1 + x2) (y1 + y2)
 
 ------------------------------------------------------------
 --  Binary trees
@@ -81,62 +87,10 @@ import           Linear.Affine
 -- like @BTree (Maybe a)@ with @Nothing@ at internal nodes;
 -- 'renderTree' lets you specify how to draw each node.
 
--- | Binary trees with data at internal nodes.
-data BTree a = Empty | BNode a (BTree a) (BTree a)
-  deriving (Eq, Ord, Read, Show, Functor, F.Foldable, T.Traversable)
-
--- | Convenient constructor for leaves.
-leaf :: a -> BTree a
-leaf a = BNode a Empty Empty
 
 ------------------------------------------------------------
 --  Layout algorithms
 ------------------------------------------------------------
-
---------------------------------------------------
--- Unique X layout for binary trees.  No
--- two nodes share the same X coordinate.
-
-data Pos = Pos { _level :: Int
-               , _horiz :: Int
-               }
-  deriving (Eq, Show)
-
-makeLenses ''Pos
-
-pos2Point :: Num n => n -> n -> Pos -> P2 n
-pos2Point cSep lSep (Pos l h) = p2 (fromIntegral h * cSep, -fromIntegral l * lSep)
-
--- | @uniqueXLayout xSep ySep t@ lays out the binary tree @t@ using a
---   simple recursive algorithm with the following properties:
---
---   * Every left subtree is completely to the left of its parent, and
---     similarly for right subtrees.
---
---   * All the nodes at a given depth in the tree have the same
---     y-coordinate. The separation distance between levels is given by
---     @ySep@.
---
---   * Every node has a unique x-coordinate. The separation between
---     successive nodes from left to right is given by @xSep@.
-
-uniqueXLayout :: Num n => n -> n -> BTree a -> Maybe (Tree (a, P2 n))
-uniqueXLayout cSep lSep t = (fmap . fmap . second) (pos2Point cSep lSep)
-                $ evalState (uniqueXLayout' t) (Pos 0 0)
-  where uniqueXLayout' Empty         = return Nothing
-        uniqueXLayout' (BNode a l r) = do
-          down
-          l' <- uniqueXLayout' l
-          up
-          p  <- mkNode
-          down
-          r' <- uniqueXLayout' r
-          up
-          return $ Just (Node (a,p) (catMaybes [l', r']))
-        mkNode = get <* (horiz += 1)
-
-        down = level += 1
-        up   = level -= 1
 
 --------------------------------------------------
 -- "Symmetric" layout of rose trees.
@@ -260,7 +214,53 @@ data SymmLayoutOpts n a =
            --   the documentation for 'slWidth' for more information.
          }
 
-makeLenses ''SymmLayoutOpts
+-- makeLenses ''SymmLayoutOpts
+slHSep ::
+  forall n_a4VT a_a4VU. Lens' (SymmLayoutOpts n_a4VT a_a4VU) n_a4VT
+slHSep
+  = lensVL
+      (\ f_a7i8 s_a7i9
+         -> case s_a7i9 of
+              SLOpts x1_a7ia x2_a7ib x3_a7ic x4_a7id
+                -> fmap
+                     (\ y_a7ie -> SLOpts y_a7ie x2_a7ib x3_a7ic x4_a7id)
+                     (f_a7i8 x1_a7ia))
+{-# INLINE slHSep #-}
+slHeight ::
+  forall n_a4VT a_a4VU. Lens' (SymmLayoutOpts n_a4VT a_a4VU) (a_a4VU
+                                                              -> (n_a4VT, n_a4VT))
+slHeight
+  = lensVL
+      (\ f_a7if s_a7ig
+         -> case s_a7ig of
+              SLOpts x1_a7ih x2_a7ii x3_a7ij x4_a7ik
+                -> fmap
+                     (\ y_a7il -> SLOpts x1_a7ih x2_a7ii x3_a7ij y_a7il)
+                     (f_a7if x4_a7ik))
+{-# INLINE slHeight #-}
+slVSep ::
+  forall n_a4VT a_a4VU. Lens' (SymmLayoutOpts n_a4VT a_a4VU) n_a4VT
+slVSep
+  = lensVL
+      (\ f_a7im s_a7in
+         -> case s_a7in of
+              SLOpts x1_a7io x2_a7ip x3_a7iq x4_a7ir
+                -> fmap
+                     (\ y_a7is -> SLOpts x1_a7io y_a7is x3_a7iq x4_a7ir)
+                     (f_a7im x2_a7ip))
+{-# INLINE slVSep #-}
+slWidth ::
+  forall n_a4VT a_a4VU. Lens' (SymmLayoutOpts n_a4VT a_a4VU) (a_a4VU
+                                                              -> (n_a4VT, n_a4VT))
+slWidth
+  = lensVL
+      (\ f_a7it s_a7iu
+         -> case s_a7iu of
+              SLOpts x1_a7iv x2_a7iw x3_a7ix x4_a7iy
+                -> fmap
+                     (\ y_a7iz -> SLOpts x1_a7iv x2_a7iw y_a7iz x4_a7iy)
+                     (f_a7it x3_a7ix))
+{-# INLINE slWidth #-}
 
 instance Num n => Default (SymmLayoutOpts n a) where
   def = SLOpts
@@ -281,23 +281,6 @@ symmLayoutR opts (Node a ts) = (rt, ext)
         ext              = (opts^.slWidth) a `consExtent` mconcat pExtents
         rt               = Node (a, 0) pTrees
 
--- | Symmetric tree layout algorithm specialized to binary trees.
---   Returns a tree layout as well as an extent.
-symmLayoutBinR :: (Fractional n, Ord n) =>
-                  SymmLayoutOpts n a -> BTree a -> (Maybe (Rel Tree n a), Extent n)
-symmLayoutBinR _    Empty         = (Nothing, mempty)
-symmLayoutBinR opts (BNode a l r) = (Just rt, ext)
-  where (l', extL) = symmLayoutBinR opts l
-        (r', extR) = symmLayoutBinR opts r
-        positions  = case (l', r') of
-                       (Nothing, _) -> [0, opts ^. slHSep / 2]
-                       (_, Nothing) -> [-(opts ^. slHSep) / 2, 0]
-                       _          -> fitList (opts ^. slHSep) [extL, extR]
-        pTrees   = catMaybes $ zipWith (fmap . moveTree) positions [l',r']
-        pExtents = zipWith moveExtent positions [extL, extR]
-        ext = (opts^.slWidth) a `consExtent` mconcat pExtents
-        rt  = Node (a, 0) pTrees
-
 -- | Run the symmetric rose tree layout algorithm on a given tree,
 --   resulting in the same tree annotated with node positions.
 symmLayout' :: (Fractional n, Ord n) => SymmLayoutOpts n a -> Tree a -> Tree (a, P2 n)
@@ -309,24 +292,6 @@ symmLayout' opts = unRelativize opts origin . fst . symmLayoutR opts
 symmLayout :: (Fractional n, Ord n) => Tree a -> Tree (a, P2 n)
 symmLayout = symmLayout' def
 
--- | Lay out a binary tree using a slight variant of the symmetric
---   layout algorithm.  In particular, if a node has only a left child
---   but no right child (or vice versa), the child will be offset from
---   the parent horizontally by half the horizontal separation
---   parameter. Note that the result will be @Nothing@ if and only if
---   the input tree is @Empty@.
-symmLayoutBin' :: (Fractional n, Ord n) => SymmLayoutOpts n a -> BTree a -> Maybe (Tree (a,P2 n))
-symmLayoutBin' opts = fmap (unRelativize opts origin) . fst . symmLayoutBinR opts
-
--- | Lay out a binary tree using a slight variant of the symmetric
---   layout algorithm, using default options.  In particular, if a
---   node has only a left child but no right child (or vice versa),
---   the child will be offset from the parent horizontally by half the
---   horizontal separation parameter. Note that the result will be
---   @Nothing@ if and only if the input tree is @Empty@.
-symmLayoutBin :: (Fractional n, Ord n) => BTree a -> Maybe (Tree (a,P2 n))
-symmLayoutBin = symmLayoutBin' def
-
 -- | Given a fixed location for the root, turn a tree with
 --   \"relative\" positioning into one with absolute locations
 --   associated to all the nodes.
@@ -335,250 +300,6 @@ unRelativize :: (Num n, Ord n) =>
 unRelativize opts curPt (Node (a,hOffs) ts)
     = Node (a, rootPt) (map (unRelativize opts (rootPt .+^ (vOffs *^ unit_Y))) ts)
   where rootPt = curPt .+^ (hOffs *^ unitX)
-        vOffs  = - fst ((opts^.slHeight) a)
+        vOffs  = -(fst ((opts ^. slHeight) a))
                + (maximum . map (snd . (opts^.slHeight) . fst . rootLabel) $ ts)
                + (opts ^. slVSep)
-
---------------------------------------------------
---  Force-directed layout of rose trees
-
--- $forcedirected
--- Force-directed layout of rose trees.
-
-data ForceLayoutTreeOpts n =
-  FLTOpts
-  { _forceLayoutOpts :: ForceLayoutOpts n -- ^ Options to the force layout simulator, including damping.
-  , _edgeLen         :: n -- ^ How long edges should be, ideally.
-                                           --   This will be the resting length for
-                                           --   the springs.
-  , _springK         :: n -- ^ Spring constant.  The
-                                           --   bigger the constant,
-                                           --   the more the edges
-                                           --   push/pull towards their
-                                           --   resting length.
-  , _staticK         :: n -- ^ Coulomb constant.  The
-                                           --   bigger the constant, the
-                                           --   more sibling nodes repel
-                                           --   each other.
-  }
-
-makeLenses ''ForceLayoutTreeOpts
-
-instance Floating n => Default (ForceLayoutTreeOpts n) where
-  def = FLTOpts
-    { _forceLayoutOpts = def
-    , _edgeLen = sqrt 2
-    , _springK = 0.05
-    , _staticK = 0.1
-    }
-
--- | Assign unique ID numbers to the nodes of a tree, and generate an
---   'Ensemble' suitable for simulating in order to do force-directed
---   layout of the tree.  In particular,
---
---   * edges are modeled as springs
---
---   * nodes are modeled as point charges
---
---   * nodes are constrained to keep the same y-coordinate.
---
---   The input to @treeToEnsemble@ could be a tree already laid out by
---   some other method, such as 'uniqueXLayout'.
-treeToEnsemble :: forall a n. Floating n => ForceLayoutTreeOpts n
-               -> Tree (a, P2 n) -> (Tree (a, PID), Ensemble V2 n)
-treeToEnsemble opts t =
-  ( fmap (first fst) lt
-  , Ensemble
-      [ (edges, \pt1 pt2 -> project unitX (hookeForce (opts ^. springK) (opts ^. edgeLen) pt1 pt2))
-      , (sibs,  \pt1 pt2 -> project unitX (coulombForce (opts ^. staticK) pt1 pt2))
-      ]
-      particleMap
-  )
-
-  where lt :: Tree ((a,P2 n), PID)
-        lt = label t
-
-        particleMap :: M.Map PID (Particle V2 n)
-        particleMap = M.fromList
-                    . map (second initParticle)
-                    . F.toList
-                    . fmap (swap . first snd)
-                    $ lt
-        swap (x,y) = (y,x)
-
-        edges, sibs :: [Edge]
-        edges       = extractEdges (fmap snd lt)
-        sibs        = extractSibs [fmap snd lt]
-
-        extractEdges :: Tree PID -> [Edge]
-        extractEdges (Node i cs) = map (((,) i) . rootLabel) cs
-                                    ++ concatMap extractEdges cs
-
-        extractSibs :: Forest PID -> [Edge]
-        extractSibs [] = []
-        extractSibs ts = (\is -> zip is (tail is)) (map rootLabel ts)
-                      ++ extractSibs (concatMap subForest ts)
-
---        sz = ala Sum foldMap . fmap (const 1) $ t
---        sibs = [(x,y) | x <- [0..sz-2], y <- [x+1 .. sz-1]]
-
--- | Assign unique IDs to every node in a tree (or other traversable structure).
-label :: (T.Traversable t) => t a -> t (a, PID)
-label = flip evalState 0 . T.mapM (\a -> get >>= \i -> modify (+1) >> return (a,i))
-
--- | Reconstruct a tree (or any traversable structure) from an
---   'Ensemble', given unique identifier annotations matching the
---   identifiers used in the 'Ensemble'.
-reconstruct :: (Functor t, Num n) => Ensemble V2 n -> t (a, PID) -> t (a, P2 n)
-reconstruct e = (fmap . second)
-                  (fromMaybe origin . fmap (view pos) . flip M.lookup (e^.particles))
-
--- | Force-directed layout of rose trees, with default parameters (for
---   more options, see 'forceLayoutTree'').  In particular,
---
---   * edges are modeled as springs
---
---   * nodes are modeled as point charges
---
---   * nodes are constrained to keep the same y-coordinate.
---
---   The input could be a tree already laid out by some other method,
---   such as 'uniqueXLayout'.
-forceLayoutTree :: (Floating n, Ord n) => Tree (a, P2 n) -> Tree (a, P2 n)
-forceLayoutTree = forceLayoutTree' def
-
--- | Force-directed layout of rose trees, with configurable parameters.
-forceLayoutTree' :: (Floating n, Ord n) =>
-                    ForceLayoutTreeOpts n -> Tree (a, P2 n) -> Tree (a, P2 n)
-forceLayoutTree' opts t = reconstruct (forceLayout (opts^.forceLayoutOpts) e) ti
-  where (ti, e) = treeToEnsemble opts t
-
--- | Radial layout of rose trees, adapted from Andy Pavlo,
---   "Interactive, Tree-Based Graph Visualization", p. 18
---   (<http://www.cs.cmu.edu/~pavlo/static/papers/APavloThesis032006.pdf>)
-radialLayout :: Tree a -> Tree (a, P2 Double)
-radialLayout t@(Node a _)
-  = Node (a, origin) (assignPos 0 pi 0 (nodeLeaves info) (weight t) ts)
-  where
-    Node (_,info) ts = decorate t
-
--- | Implementation of radial layout: @assignPos alpha beta theta k w ts@
---
---   * @alpha@, @beta@ define the bounds of an annular wedge around the root
---   * @k@ is #leaves of root and lambda is #leaves of vertex
---   * @theta@ is ?
---   * @w@ is ?
---
---   The algorithm used is an extension of Algorithm 1, Page 18 of
---   <http://www.cs.cmu.edu/~pavlo/static/papers/APavloThesis032006.pdf>.
---   See
---   <https://drive.google.com/file/d/0B3el1oMKFsOIVGVRYzJzWGwzWDA/view>
---   for more examples.
-assignPos :: Double -> Double -> Double -> Int -> Double  -> [Tree (a, NodeInfo)] -> [Tree (a, P2 Double)]
-assignPos _ _ _ _ _ [] = []
-assignPos alpha beta theta k w (Node (a, info) ts1 : ts2)
-  = Node (a, pt) (assignPos theta u theta lambda w ts1) : assignPos alpha beta u k w ts2
-    where
-      lambda  = nodeLeaves info
-      u       = theta + (beta - alpha) * fromIntegral lambda / fromIntegral k
-      pt      = (1 ^& 0)
-              # rotate (theta + u @@ rad)
-              # scale (w * fromIntegral (nodeDepth info) / 2)
-
--- | Compute the length of radius determined by the number of children to avoid
---   node overlapping
-weight :: Tree a -> Double
-weight t = maximum $
-               map (((\ x -> fromIntegral x / 2) . length) . map rootLabel)
-                    (takeWhile (not . null) $ iterate (concatMap subForest) [t])
-
-data NodeInfo = NodeInfo
-  { nodeLeaves :: Int
-  , nodeDepth  :: Int
-  }
-
-decorate :: Tree a -> Tree (a, NodeInfo)
-decorate = decorate' 0
-
-decorate' :: Int -> Tree a -> Tree (a, NodeInfo)
-decorate' d (Node a ts) = Node (a, info) ts'
-  where
-    ts'   = map (decorate' (d+1)) ts
-    infos = map (snd . rootLabel) ts'
-    leaves
-      | null ts   = 1
-      | otherwise = sum . map nodeLeaves $ infos
-
-    info  = NodeInfo leaves d
-
-------------------------------------------------------------
---  Rendering
-------------------------------------------------------------
-
--- | Draw a tree annotated with node positions, given functions
---   specifying how to draw nodes and edges.
-renderTree :: (Monoid' m, Floating n, Ord n)
-           => (a -> QDiagram b V2 n m) -> (P2 n -> P2 n -> QDiagram b V2 n m)
-           -> Tree (a, P2 n) -> QDiagram b V2 n m
-renderTree n e = renderTree' n (e `on` snd)
-
--- | Draw a tree annotated with node positions, given functions
---   specifying how to draw nodes and edges.  Unlike 'renderTree',
---   this version gives the edge-drawing function access to the actual
---   values stored at the nodes rather than just their positions.
-renderTree' :: (Monoid' m, Floating n, Ord n)
-           => (a -> QDiagram b V2 n m) -> ((a,P2 n) -> (a,P2 n) -> QDiagram b V2 n m)
-           -> Tree (a, P2 n) -> QDiagram b V2 n m
-renderTree' renderNode renderEdge = alignT . centerX . renderTreeR
-  where
-    renderTreeR (Node (a,p) cs) =
-         renderNode a # moveTo p
-      <> mconcat (map renderTreeR cs)
-      <> mconcat (map (renderEdge (a,p) . rootLabel) cs)
-
-
--- > -- Critical size-limited Boltzmann generator for binary trees (used in example)
--- >
--- > import           Control.Applicative
--- > import           Control.Lens                   hiding (( # ), Empty)
--- > import           Control.Monad.Random
--- > import           Control.Monad.Reader
--- > import           Control.Monad.State
--- > import           Control.Monad.Trans.Maybe
--- >
--- > genTreeCrit :: ReaderT Int (StateT Int (MaybeT (Rand StdGen))) (BTree ())
--- > genTreeCrit = do
--- >   r <- getRandom
--- >   if r <= (1/2 :: Double)
--- >     then return Empty
--- >     else atom >> (BNode () <$> genTreeCrit <*> genTreeCrit)
--- >
--- > atom :: ReaderT Int (StateT Int (MaybeT (Rand StdGen))) ()
--- > atom = do
--- >   targetSize <- ask
--- >   curSize <- get
--- >   when (curSize >= targetSize) mzero
--- >   put (curSize + 1)
--- >
--- > genOneTree :: Int -> Int -> Double -> Maybe (BTree ())
--- > genOneTree seed size eps =
--- >   case mt of
--- >     Nothing -> Nothing
--- >     Just (t,sz) -> if sz >= minSz then Just t else Nothing
--- >
--- >   where
--- >     g          = mkStdGen seed
--- >     sizeWiggle = floor $ fromIntegral size * eps
--- >     maxSz = size + sizeWiggle
--- >     minSz = size - sizeWiggle
--- >     mt = (evalRand ?? g) . runMaybeT . (runStateT ?? 0) . (runReaderT ?? maxSz)
--- >        $ genTreeCrit
--- >
--- > genTree' :: Int -> Int -> Double -> BTree ()
--- > genTree' seed size eps =
--- >   case (genOneTree seed size eps) of
--- >     Nothing -> genTree' (seed+1) size eps
--- >     Just t  -> t
--- >
--- > genTree :: Int -> Double -> BTree ()
--- > genTree = genTree' 0

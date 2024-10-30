@@ -7,19 +7,30 @@ executable ghc-wasm-miso-examples
     build-depends:
       , aeson
       , base
+      , bytestring
       , containers
+      , directory
+      , extra
+      , filepath
       , hs2048
       , jsaddle
       , miso
       , mtl
+      , optics
+      , prettyprinter
+      , pretty-simple
+      , primer
       , random
       , text
+      , uniplate
     hs-source-dirs: app
     default-language: GHC2021
     default-extensions: BlockArguments LambdaCase LexicalNegation OverloadedStrings RecordWildCards
     ghc-options: -Wall -Wunused-packages -Wno-name-shadowing -Wredundant-constraints
     other-modules:
       App
+      Layout
+      Primer
       SimpleCounter
       Snake
       TodoMVC
@@ -28,4 +39,4 @@ executable ghc-wasm-miso-examples
       build-depends: ghc-experimental, jsaddle-wasm
       ghc-options: -no-hs-main -optl-mexec-model=reactor "-optl-Wl,--export=hs_start"
     else
-      build-depends: jsaddle-warp, warp, websockets
+      build-depends: jsaddle-warp, warp, websockets, optics-th, jsaddle-webkit2gtk
