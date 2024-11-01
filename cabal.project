@@ -1,5 +1,12 @@
 packages: . hs2048
 
+constraints:
+  -- TODO https://github.com/dmjio/miso/pull/752
+  text==2.1.1,
+  -- TODO https://github.com/haskell-gi/haskell-gi/issues/457
+  haskell-gi==0.26.11,
+  gi-gdkpixbuf:setup.haskell-gi == 0.26.11,
+
 index-state: 2024-10-26T13:27:42Z
 
 if arch(wasm32)
