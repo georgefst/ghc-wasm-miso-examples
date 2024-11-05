@@ -18,12 +18,12 @@ import XHR qualified
 
 data Opts = Opts {primerUseSavedState :: Bool}
 
-start :: Opts -> JSString -> JSM ()
-start Opts{..} e =
+start :: JSString -> JSM ()
+start e =
   case fromJSString e :: String of
     "simplecounter" -> SimpleCounter.start
     "snake" -> Snake.start
-    "primer" -> Primer.start primerUseSavedState
+    "primer" -> Primer.start
     "todomvc" -> TodoMVC.start
     "xhr" -> XHR.start
     "2048" -> TwoZeroFourEight.start
