@@ -20,15 +20,13 @@ module Main (main) where
 import App (start)
 import Language.Javascript.JSaddle
 import Language.Javascript.JSaddle.Warp
-import Network.Wai.Handler.Warp
-import Network.WebSockets
 import System.Environment
 
 main :: IO ()
 main = getArgs >>= \case
-    [arg] -> runSettings (setPort 8000 defaultSettings)
-        =<< jsaddleOr defaultConnectionOptions (start $ toJSString arg)
-            jsaddleApp
+    -- Note that `debug` works with `cabal repl` but not `cabal run`.
+    -- The best workflow is to run `ghcid -c "cabal repl ghc-wasm-miso-examples" -W -T ':main primer'`.
+    [arg] -> debug 8000 $ start $ toJSString arg
     _ -> fail "bad args: specify an example, e.g. 2048"
 
 #endif
