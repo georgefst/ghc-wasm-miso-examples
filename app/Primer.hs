@@ -40,10 +40,10 @@ import Data.Tuple.Extra (firstM)
 import Debug.Pretty.Simple
 import Language.Javascript.JSaddle hiding ((<#))
 import Layout
-import Miso hiding (events, logLevel, mountPoint, onClick)
+import Miso
 import Optics hiding (view)
 import Optics qualified
-import Optics.State.Operators ((<<%=))
+import Optics.State.Operators ((<<%=), (?=))
 import Prettyprinter.Render.Text (putDoc)
 import Primer.App
 import Primer.Builtins
@@ -61,61 +61,69 @@ import System.Directory (doesFileExist)
 import Text.Pretty.Simple
 import Prelude (error)
 
-start :: Bool -> JSM ()
--- TODO I'd prefer to use record syntax, but don't know how to do so while avoiding importing field selectors
--- start = startApp $ withSavedState $ App initialModel update view [] defaultEvents NoOp Nothing Off
--- eugh, it gets worse - I need these names for `withSavedState`...
-start useSavedState =
-    (if useSavedState then startAppWithSavedState else startApp) $
-        App initialModel update' view' [] defaultEvents NoOp Nothing Off
+start :: JSM ()
+start =
+    startAppWithSavedState
+        App
+            { model = Model{expr = mapExpr, selection = Nothing}
+            , update = updateModel
+            , view = viewModel
+            , subs = []
+            , events = defaultEvents
+            , initialAction = StartApp
+            , mountPoint = Nothing
+            , logLevel = Off
+            }
 
 data Model = Model
-    { expr :: ExprT -- for now we TC everything up front so we can use `ExprT`, thus guaranteeing existence of metadata
+    { expr :: ExprT -- We typecheck everything up front so that we can use `ExprT`, guaranteeing existence of metadata.
     , selection :: Maybe NodeSelectionT -- TODO once we move beyond one-tree prototype, we'll need to generalise this
     }
     deriving (Eq, Show, Read, Generic, FromJSON, ToJSON)
 
--- TODO generalise to kinds
--- TODO upstream?
--- TODO use an `Either` to explain why type is not available? in app usage, it always should be, right?
--- selectionType :: Selection -> Maybe (Type' () ())
--- selectionType = \case
---     SelectionDef DefSelection{node = Just NodeSelection{nodeType = BodyNode, meta = Left meta}} ->
---         meta ^? _type % _Just % _synthed
---     sel -> error "other selections not implemented"
--- selectionType :: SelectionT -> Either (Type' () ()) (Either (Meta (Kind' ())) KindMeta)
--- selectionType = \case
---     SelectionDef DefSelection{node = Just NodeSelection{nodeType = BodyNode, meta}} ->
---         case meta of
---             Left m -> Left $ typeFromCache $ m ^. _type
---             Right m -> Right m
---     sel -> error "only body node selections are supported so far"
-nodeSelectionType :: NodeSelectionT -> Either (Type' () ()) (Either (Kind' ()) ())
-nodeSelectionType =
-    bimap
-        (typeFromCache . Optics.view _type)
-        (bimap (Optics.view _type) (Optics.view _type))
-        . (.meta)
-
 data Action
-    = NoOp
+    = StartApp
     | SelectNode NodeSelectionT
     deriving (Eq, Show)
 
-initialModel :: Model
-initialModel = Model{expr = mapExpr, selection = Nothing}
+updateModel :: Action -> Model -> Effect Action Model
+updateModel =
+    fromTransition . \case
+        StartApp -> pure ()
+        SelectNode sel -> #selection ?= sel
 
--- TODO use transition monad: https://hackage.haskell.org/package/miso-1.8.4.0/docs/Miso-Types.html#g:1
-update' :: Action -> Model -> Effect Action Model
-update' = \case
-    NoOp -> noEff
-    SelectNode sel -> noEff . (#selection ?~ sel)
+viewModel :: Model -> View Action
+viewModel Model{..} =
+    div_ [] $
+        [ "Primer \x1f937\x1f3fd\x200d\x2640\xfe0f"
+        , br_ []
+        , br_ []
+        , viewTree
+            -- TODO arbitrary height - we should fit to content
+            [style_ $ Map.fromList [("height", "400px")]]
+            $ viewTreeExpr expr
+        , br_ []
+        , br_ []
+        , div_ [] case selection of
+            Nothing -> ["no selection"]
+            Just s ->
+                [ text $ "selected node ID: " <> (show $ getIDNodeSelection s)
+                , br_ []
+                , case nodeSelectionType s of
+                    Left t -> viewTree [] $ viewTreeType t
+                    Right (Left t) -> viewTree [] $ viewTreeKind t
+                    -- TODO display something sensible here
+                    -- in the React frontend, I don't think we ever worked out what...
+                    Right (Right ()) -> "displaying types/kinds/kind1s of kinds is not yet supported"
+                ]
+        ]
 
--- TODO obviously this is a PoC hack: https://github.com/dmjio/miso/issues/749
--- improve and upstream
+-- TODO improve and upstream this: https://github.com/dmjio/miso/issues/749
 startAppWithSavedState :: forall model action. (Eq model, FromJSON model, ToJSON model) => Miso.App model action -> JSM ()
 startAppWithSavedState app = do
-    savedModel <- eitherM (\e -> putStrLn ("saved state not loaded: " <> e) >> pure Nothing) (pure . Just) $ getLocalStorage storageKey
+    savedModel <-
+        eitherM (\e -> putStrLn ("saved state not loaded: " <> e) >> pure Nothing) (pure . Just) $
+            getLocalStorage storageKey
     startApp
         app
             { model = fromMaybe app.model savedModel
@@ -131,99 +139,41 @@ startAppWithSavedState app = do
             , initialAction = Just app.initialAction
             }
   where
-    -- TODO add `/tmp/`? what about Windows and actual web storage?
-    -- hang on, where is this even saved? use `strace` or something to debug?
-    -- intended to just inspect `jsaddle` source but I don't see any matches for filepath/directory operations
     storageKey = "miso-app-state"
-
-view' :: Model -> View Action
-view' Model{..} =
-    div_ [] $
-        [ "Primer"
-        , br_ []
-        , br_ []
-        ]
-            <> [ viewTree
-                    -- TODO arbitrary height - we should fit to content
-                    [style_ $ Map.fromList [("height", "400px")]]
-                    $ viewTreeExpr expr
-               ]
-            <> [ br_ []
-               , br_ []
-               ]
-            <> ( case selection of
-                    Nothing -> ["no selection"]
-                    Just s ->
-                        [ text $ "selected node ID: " <> (show $ getIDNodeSelection s)
-                        , br_ []
-                        , case nodeSelectionType s of
-                            Left t -> viewTree [] $ viewTreeType t
-                            Right (Left t) -> viewTree [] $ viewTreeKind t
-                            -- TODO display something sensible here
-                            -- in the React frontend, I don't think we ever worked out what...
-                            Right (Right ()) -> "displaying types/kinds/kind1s of kinds is not yet supported"
-                        ]
-               )
 
 onClickExpr :: Expr' (Meta TypeCache) b c -> Attribute Action
 onClickExpr e = onClick $ SelectNode $ NodeSelection BodyNode $ Left $ e ^. _exprMetaLens
 onClickType :: TypeT -> Attribute Action
 onClickType t = onClick $ SelectNode $ NodeSelection BodyNode $ Right $ Left $ t ^. _typeMetaLens
 
--- TODO doing this generically is a decent first approximation but ultimately we want to at least add some special cases
--- e.g. nodes to be rendered to the side, or nested
--- and nodes which don't correspond to a subexpression (is this just patterns? should we just make those first class?)
--- idTreeExpr :: ExprT -> Tree.Tree ID
--- -- idTreeExpr :: (Data a, Data b, Data c, HasID a) => Expr' a b c -> Tree.Tree ID
--- idTreeExpr = para \e cs ->
---     Tree.Node (getID e) $ map idTreeType (e ^.. typesInExpr) <> cs
--- idTreeType :: TypeT -> Tree.Tree ID
--- idTreeType = para \t cs ->
---     Tree.Node (getID t) $ map idTreeKind (t ^.. kindsInType) <> cs
--- idTreeKind :: KindT -> Tree.Tree ID
--- idTreeKind = para $ Tree.Node . getID
 viewTreeExpr :: ExprT -> Tree.Tree (View Action)
-viewTreeExpr = para $ \e cs ->
-    let subtrees = map viewTreeType (e ^.. typesInExpr) <> cs
-        lname = unName . unLocalName
-        -- TODO show qualified (old frontend never did...)
+viewTreeExpr = para \e cs ->
+    let lname = unName . unLocalName
         gname = unName . baseName
         exprDiv = div_ . (onClickExpr e :)
-        -- TODO avoid - this isn't a flexible enough abstraction, given styling etc.
-        -- but it makes it quick to fill out some cases
-        -- all renderings which utilise this should be considered placeholders
-        simpleTextNode t =
-            Tree.Node
-                ( exprDiv
-                    []
-                    [text t]
-                )
-                subtrees
-        showPrim (_ :: PrimCon) = "Primitive" -- TODO
+        normalNode t = simpleTextNode t $ map viewTreeType (e ^.. typesInExpr) <> cs
+        -- TODO this mixes up two things - don't tree-ify and assume `text` in one - see animation prim rendering
+        simpleTextNode t = Tree.Node $ exprDiv [] [text t]
      in case e of
-            Hole{} -> simpleTextNode "⚠️"
-            EmptyHole{} -> simpleTextNode "?"
-            Ann{} -> simpleTextNode ":"
-            Primer.App{} -> simpleTextNode "←"
-            APP{} -> simpleTextNode "←"
-            Con _ c _ -> simpleTextNode $ gname c
-            Lam _ v _ -> simpleTextNode $ "λ" <> lname v
-            LAM _ v _ -> simpleTextNode $ "Λ" <> lname v
-            Var _ (GlobalVarRef v) -> simpleTextNode $ gname v
-            Var _ (LocalVarRef v) -> simpleTextNode $ lname v
-            Let{} -> simpleTextNode "let"
-            LetType{} -> simpleTextNode "let type"
-            Letrec{} -> simpleTextNode "let rec"
+            Hole{} -> normalNode "⚠️"
+            EmptyHole{} -> normalNode "?"
+            Ann{} -> normalNode ":"
+            Primer.App{} -> normalNode "←"
+            APP{} -> normalNode "←"
+            Con _ c _ -> normalNode $ gname c
+            Lam _ v _ -> normalNode $ "λ" <> lname v
+            LAM _ v _ -> normalNode $ "Λ" <> lname v
+            Var _ (GlobalVarRef v) -> normalNode $ gname v
+            Var _ (LocalVarRef v) -> normalNode $ lname v
+            Let{} -> normalNode "let"
+            LetType{} -> normalNode "let type"
+            Letrec{} -> normalNode "let rec"
             -- TODO currently rendered in something akin to Vonnegut-style...
             -- boxy would be better but much harder to implement
             -- ideally we'd implement Tidy with a modification to properly handle right-children first
             Case _ scrut bs fb ->
-                Tree.Node
-                    ( exprDiv
-                        []
-                        [text "match"]
-                    )
-                    $ viewTreeExpr scrut
+                simpleTextNode "match" $
+                    viewTreeExpr scrut
                         : ( bs
                                 <&> \(CaseBranch p bs' r) ->
                                     Tree.Node
@@ -231,7 +181,12 @@ viewTreeExpr = para $ \e cs ->
                                             []
                                             $ ( text case p of
                                                     PatCon c -> gname c
-                                                    PatPrim c -> showPrim c
+                                                    PatPrim c -> case c of
+                                                        PrimChar c' -> show c'
+                                                        PrimInt n -> show n
+                                                        -- This branch should never actually be triggered,
+                                                        -- since such programs can't be constructed.
+                                                        PrimAnimation _ -> "error: can't pattern match on animation"
                                               )
                                                 : concatMap
                                                     (\v -> [text " ", v])
@@ -239,22 +194,13 @@ viewTreeExpr = para $ \e cs ->
                                         )
                                         [viewTreeExpr r]
                           )
-                            <> ( case fb of
-                                    CaseExhaustive -> []
-                                    CaseFallback r ->
-                                        [ Tree.Node
-                                            ( exprDiv
-                                                []
-                                                -- TODO why is this a lexical error?
-                                                -- can we use hex syntax?
-                                                -- what does JS frontend do?
-                                                -- [text "🤷🏽‍♀️"]
-                                                [text "_"]
-                                            )
-                                            [viewTreeExpr r]
-                                        ]
-                               )
-            PrimCon _ c -> simpleTextNode $ showPrim c
+                            <> case fb of
+                                CaseExhaustive -> []
+                                CaseFallback r -> [simpleTextNode "_" [viewTreeExpr r]]
+            PrimCon _ c -> case c of
+                PrimChar c' -> normalNode $ show c'
+                PrimInt n -> normalNode $ show n
+                PrimAnimation a -> Tree.Node (img_ [src_ $ "data:img/gif;base64," <> a]) []
 
 -- TODO placeholder
 -- e -> simpleTextNode $ conName e
@@ -289,13 +235,6 @@ viewKindNode = \case
     KFun{} -> text "→"
     -- TODO placeholder
     e -> text $ conName e
-
--- TODO this is just a crutch for our very-dumb renderer
--- makes it possible to actually click nodes without triggering parents' actions as well
--- although actually we might continue to want `preventDefault` in order to avoid e.g. highlighting text
--- couldn't the API for this be a bit better
-onClick :: action -> Attribute action
-onClick action = onWithOptions Options{stopPropagation = True, preventDefault = True} "click" emptyDecoder $ \() -> action
 
 viewTree :: [Attribute action] -> Tree (View action) -> View action
 viewTree attrs =
@@ -543,11 +482,9 @@ instance MonadFresh NameCounter (M e) where
 runTC :: M e a -> Either e a
 runTC = runExcept . flip evalStateT (0, toEnum 0) . (.unM)
 
--- prettyPrintExpr :: PrettyOptions -> Expr' a b c -> IO ()
--- prettyPrintExpr opts e = do
---     putDoc $ prettyExpr opts e
---     putStrLn ("" :: Text)
--- prettyPrintType :: PrettyOptions -> Type' a b -> IO ()
--- prettyPrintType opts t = do
---     putDoc $ prettyType opts t
---     putStrLn ("" :: Text)
+nodeSelectionType :: NodeSelectionT -> Either (Type' () ()) (Either (Kind' ()) ())
+nodeSelectionType =
+    bimap
+        (typeFromCache . Optics.view _type)
+        (bimap (Optics.view _type) (Optics.view _type))
+        . (.meta)
