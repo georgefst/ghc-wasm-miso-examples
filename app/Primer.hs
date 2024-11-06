@@ -65,6 +65,7 @@ data Model = Model
 data Action
     = StartApp
     | SelectNode NodeSelectionT
+    | UnselectableNodeClicked
     deriving (Eq, Show)
 
 updateModel :: Action -> Model -> Effect Action Model
@@ -72,6 +73,7 @@ updateModel =
     fromTransition . \case
         StartApp -> pure ()
         SelectNode sel -> #selection ?= sel
+        UnselectableNodeClicked -> pure ()
 
 viewModel :: Model -> View Action
 viewModel Model{..} =
@@ -84,26 +86,26 @@ viewModel Model{..} =
                     , ("justify-items", "center")
                     ]
                 ]
-                [ viewTree $ viewTreeExpr expr
+                [ SelectNode . NodeSelection BodyNode <$> viewTree (viewTreeExpr expr)
                 , case selection of
                     Nothing -> "no selection"
-                    Just s -> case nodeSelectionType s of
-                        Left t -> viewTree $ viewTreeType t
-                        Right (Left t) -> viewTree $ viewTreeKind t
-                        -- TODO this isn't really correct - kinds in Primer don't have kinds
-                        Right (Right ()) -> viewTree $ viewTreeKind $ KType ()
+                    Just s ->
+                        UnselectableNodeClicked <$ case nodeSelectionType s of
+                            Left t -> viewTree $ viewTreeType t
+                            Right (Left t) -> viewTree $ viewTreeKind t
+                            -- TODO this isn't really correct - kinds in Primer don't have kinds
+                            Right (Right ()) -> viewTree $ viewTreeKind $ KType ()
                 ]
           ]
 
 viewTreeExpr ::
-    (Data a, Data b, Data c, MetaToSelection a, MetaToSelection b, MetaToSelection c) =>
+    (Data a, Data b, Data c) =>
     Expr' a b c ->
-    Tree.Tree (View Action)
+    Tree.Tree (View (TermMeta' a b c))
 viewTreeExpr e = Tree.Node viewNode viewChildren
   where
     viewNode = div_
-        ( maybe [] (pure . onClick . SelectNode) $ metaToSelection $ e ^. _exprMetaLens
-        )
+        [onClick $ Left $ e ^. _exprMetaLens]
         $ pure case e of
             Hole{} -> textNode "⚠️"
             EmptyHole{} -> textNode "?"
@@ -151,14 +153,13 @@ viewTreeExpr e = Tree.Node viewNode viewChildren
     textNode t = div_ [] [text t]
 
 viewTreeType ::
-    (Data a, Data b, MetaToSelection a, MetaToSelection b) =>
-    Type' a b ->
-    Tree.Tree (View Action)
+    (Data b, Data c) =>
+    Type' b c ->
+    Tree.Tree (View (TermMeta' a b c))
 viewTreeType t = Tree.Node viewNode viewChildren
   where
     viewNode = div_
-        ( maybe [] (pure . onClick . SelectNode) $ metaToSelection $ t ^. _typeMetaLens
-        )
+        [onClick $ Right $ Left $ t ^. _typeMetaLens]
         $ pure case t of
             TEmptyHole{} -> text "?"
             THole{} -> text "⚠️"
@@ -170,15 +171,11 @@ viewTreeType t = Tree.Node viewNode viewChildren
             TLet{} -> text "let"
     viewChildren = map viewTreeKind (t ^.. kindsInType) <> map viewTreeType (children t)
 
-viewTreeKind ::
-    (Data a, MetaToSelection a) =>
-    Kind' a ->
-    Tree.Tree (View Action)
+viewTreeKind :: (Data c) => Kind' c -> Tree.Tree (View (TermMeta' a b c))
 viewTreeKind k = Tree.Node viewNode viewChildren
   where
     viewNode = div_
-        ( maybe [] (pure . onClick . SelectNode) $ metaToSelection $ k ^. _kindMetaLens
-        )
+        [onClick $ Right $ Right $ k ^. _kindMetaLens]
         $ pure case k of
             KType{} -> text "*"
             KFun{} -> text "→"
@@ -189,18 +186,6 @@ gname :: GlobalName k -> Text
 gname = unName . baseName
 lname :: LocalName k -> Text
 lname = unName . unLocalName
-
--- This allows us to abstract over interactive and non-interactive renderings.
-class MetaToSelection meta where
-    metaToSelection :: meta -> Maybe NodeSelectionT
-instance MetaToSelection () where
-    metaToSelection () = Nothing
-instance MetaToSelection ExprMetaT where
-    metaToSelection = Just . NodeSelection BodyNode . Left
-instance MetaToSelection TypeMetaT where
-    metaToSelection = Just . NodeSelection BodyNode . Right . Left
-instance MetaToSelection KindMetaT where
-    metaToSelection = Just . NodeSelection BodyNode . Right . Right
 
 viewTree :: Tree (View action) -> View action
 viewTree =
@@ -266,7 +251,8 @@ runTC = runExcept . flip evalStateT (0, toEnum 0) . (.unM)
 -- type TypeT = Type' TypeMetaT KindMetaT
 -- type KindT = Kind' KindMetaT
 -- type SelectionT = Selection' (Either ExprMetaT (Either TypeMetaT KindMetaT))
-type NodeSelectionT = NodeSelection (Either ExprMetaT (Either TypeMetaT KindMetaT))
+type TermMeta' a b c = Either a (Either b c) -- TODO make this a proper sum type
+type NodeSelectionT = NodeSelection (TermMeta' ExprMetaT TypeMetaT KindMetaT)
 type ExprMetaT = Meta TypeCache
 type TypeMetaT = Meta (Kind' ())
 type KindMetaT = Meta ()
