@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module Primer (start) where
@@ -29,13 +30,13 @@ import Primer.Core.Utils (forgetTypeMetadata)
 import Primer.Def (ASTDef (..), Def (..), astDefExpr)
 import Primer.Module (Module (moduleDefs, moduleName))
 import Primer.Name (NameCounter, unName)
-import Primer.Typecheck (ExprT, TypeError, check)
+import Primer.Typecheck (ExprT, TypeError, check, checkKind)
 
 start :: JSM ()
 start =
     startAppWithSavedState
         App
-            { model = Model{expr = mapExpr, selection = Nothing}
+            { model = Model{def = mapDef, selection = Nothing}
             , update = updateModel
             , view = viewModel
             , subs = []
@@ -46,7 +47,7 @@ start =
             }
   where
     -- TODO we display a single hardcoded expression, for the sake of demonstration
-    mapExpr =
+    mapDef =
         either (error . ("Prelude.map failed to typecheck: " <>) . show) identity
             . tcBasicProg p
             $ fromMaybe (error "prog doesn't contain Prelude.map") do
@@ -57,7 +58,7 @@ start =
         (p, _, _) = newProg
 
 data Model = Model
-    { expr :: ExprT -- We typecheck everything up front so that we can use `ExprT`, guaranteeing existence of metadata.
+    { def :: ASTDefT -- We typecheck everything up front so that we can use `ExprT`, guaranteeing existence of metadata.
     , selection :: Maybe NodeSelectionT -- TODO once we move beyond one-tree prototype, we'll need to generalise this
     }
     deriving (Eq, Show, Read, Generic, FromJSON, ToJSON)
@@ -80,11 +81,12 @@ viewModel Model{..} =
           , div_
                 [ style_
                     [ ("display", "grid")
-                    , ("grid-template-columns", "1fr 1fr")
+                    , ("grid-template-columns", "1fr 1fr 1fr")
                     , ("justify-items", "center")
                     ]
                 ]
-                [ SelectNode . NodeSelection BodyNode <$> viewTree (viewTreeExpr expr)
+                [ SelectNode . NodeSelection SigNode <$> viewTree (viewTreeType def.sig)
+                , SelectNode . NodeSelection BodyNode <$> viewTree (viewTreeExpr def.expr)
                 , case selection of
                     Nothing -> "no selection"
                     Just s ->
@@ -229,11 +231,13 @@ startAppWithSavedState app = do
 
 -- `tcWholeProg` throws away information by not returning a prog containing `ExprT`s
 -- we use `check` since, for whatever reason, `synth` deletes the case branches in `map`
-tcBasicProg :: Prog -> ASTDef -> Either TypeError ExprT
+tcBasicProg :: Prog -> ASTDef -> Either TypeError ASTDefT
 tcBasicProg p ASTDef{..} =
     runTC
         . flip (runReaderT @_ @(M TypeError)) (progCxt p)
-        $ check (forgetTypeMetadata astDefType) astDefExpr
+        $ ASTDefT
+        <$> (check (forgetTypeMetadata astDefType) astDefExpr)
+        <*> (checkKind (KType ()) astDefType)
 
 -- TODO this is all basically copied from unexposed parts of Primer library - find a way to expose
 newtype M e a = M {unM :: StateT (ID, NameCounter) (Except e) a}
@@ -246,14 +250,16 @@ runTC :: M e a -> Either e a
 runTC = runExcept . flip evalStateT (0, toEnum 0) . (.unM)
 
 -- analogous with `ExprT`/`TypeT`
--- type TypeT = Type' TypeMetaT KindMetaT
 -- type KindT = Kind' KindMetaT
 -- type SelectionT = Selection' (Either ExprMetaT (Either TypeMetaT KindMetaT))
+type TypeT = Type' TypeMetaT KindMetaT -- TODO actually exists in Primer lib but is hidden
 type TermMeta' a b c = Either a (Either b c) -- TODO make this a proper sum type
 type NodeSelectionT = NodeSelection (TermMeta' ExprMetaT TypeMetaT KindMetaT)
 type ExprMetaT = Meta TypeCache
 type TypeMetaT = Meta (Kind' ())
 type KindMetaT = Meta ()
+data ASTDefT = ASTDefT {expr :: ExprT, sig :: TypeT} -- TODO parameterise `ASTDef` etc.?
+    deriving (Eq, Show, Read, Generic, FromJSON, ToJSON)
 
 -- analogous to `typesInExpr`
 kindsInType :: AffineTraversal' (Type' a b) (Kind' b)
