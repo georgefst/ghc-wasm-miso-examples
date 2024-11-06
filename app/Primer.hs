@@ -40,7 +40,7 @@ start =
             , view = viewModel
             , subs = []
             , events = defaultEvents
-            , initialAction = StartApp
+            , initialAction = NoOp "start"
             , mountPoint = Nothing
             , logLevel = Off
             }
@@ -63,17 +63,15 @@ data Model = Model
     deriving (Eq, Show, Read, Generic, FromJSON, ToJSON)
 
 data Action
-    = StartApp
+    = NoOp Text -- For situations where Miso requires an action, but we don't actually want to do anything.
     | SelectNode NodeSelectionT
-    | UnselectableNodeClicked
     deriving (Eq, Show)
 
 updateModel :: Action -> Model -> Effect Action Model
 updateModel =
     fromTransition . \case
-        StartApp -> pure ()
+        NoOp _ -> pure ()
         SelectNode sel -> #selection ?= sel
-        UnselectableNodeClicked -> pure ()
 
 viewModel :: Model -> View Action
 viewModel Model{..} =
@@ -90,7 +88,7 @@ viewModel Model{..} =
                 , case selection of
                     Nothing -> "no selection"
                     Just s ->
-                        UnselectableNodeClicked <$ case nodeSelectionType s of
+                        NoOp "clicked non-interactive node" <$ case nodeSelectionType s of
                             Left t -> viewTree $ viewTreeType t
                             Right (Left t) -> viewTree $ viewTreeKind t
                             -- TODO this isn't really correct - kinds in Primer don't have kinds
