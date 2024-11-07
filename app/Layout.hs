@@ -38,7 +38,7 @@ import           Data.Tree
 
 import Optics hiding (Empty)
 
-data P2 a = P2 a a deriving (Eq, Show, Functor)
+data P2 a = P2{x :: a, y :: a} deriving (Eq, Show, Functor)
 origin :: Num a => P2 a
 origin = P2 0 0
 class Default a where def :: a
