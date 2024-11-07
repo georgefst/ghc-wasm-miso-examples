@@ -1,0 +1,3 @@
+reexports:
+  # Foreword probably doesn't re-export _every_ operator in Prelude, but this is a decent approximation.
+  - module Foreword exports Prelude
