@@ -76,27 +76,26 @@ updateModel =
 
 viewModel :: Model -> View Action
 viewModel Model{..} =
-    div_ []
-        $ [ "Primer"
-          , div_
-                [ style_
-                    [ ("display", "grid")
-                    , ("grid-template-columns", "1fr 1fr 1fr")
-                    , ("justify-items", "center")
-                    ]
+    div_ [] $
+        [ div_
+            [ style_
+                [ ("display", "grid")
+                , ("grid-template-columns", "1fr 1fr 1fr")
+                , ("justify-items", "center")
                 ]
-                [ SelectNode . NodeSelection SigNode <$> viewTree (viewTreeType def.sig)
-                , SelectNode . NodeSelection BodyNode <$> viewTree (viewTreeExpr def.expr)
-                , case selection of
-                    Nothing -> "no selection"
-                    Just s ->
-                        NoOp "clicked non-interactive node" <$ case nodeSelectionType s of
-                            Left t -> viewTree $ viewTreeType t
-                            Right (Left t) -> viewTree $ viewTreeKind t
-                            -- TODO this isn't really correct - kinds in Primer don't have kinds
-                            Right (Right ()) -> viewTree $ viewTreeKind $ KType ()
-                ]
-          ]
+            ]
+            [ SelectNode . NodeSelection SigNode <$> viewTree (viewTreeType def.sig)
+            , SelectNode . NodeSelection BodyNode <$> viewTree (viewTreeExpr def.expr)
+            , case selection of
+                Nothing -> "no selection"
+                Just s ->
+                    NoOp "clicked non-interactive node" <$ case nodeSelectionType s of
+                        Left t -> viewTree $ viewTreeType t
+                        Right (Left t) -> viewTree $ viewTreeKind t
+                        -- TODO this isn't really correct - kinds in Primer don't have kinds
+                        Right (Right ()) -> viewTree $ viewTreeKind $ KType ()
+            ]
+        ]
 
 viewTreeExpr ::
     (Data a, Data b, Data c) =>
@@ -142,7 +141,7 @@ viewTreeExpr e = Tree.Node viewNode viewChildren
                                                 -- since such programs can't be constructed.
                                                 PrimAnimation _ -> "error: can't pattern match on animation"
                                       )
-                                    : concatMap (\(Bind _ v) -> [text " ", text $ lname v]) bindings
+                                        : concatMap (\(Bind _ v) -> [text " ", text $ lname v]) bindings
                                 )
                                 [viewTreeExpr r]
                   )
@@ -210,8 +209,8 @@ viewTree =
 startAppWithSavedState :: forall model action. (Eq model, FromJSON model, ToJSON model) => Miso.App model action -> JSM ()
 startAppWithSavedState app = do
     savedModel <-
-        eitherM (\e -> putStrLn ("saved state not loaded: " <> e) >> pure Nothing) (pure . Just)
-            $ getLocalStorage storageKey
+        eitherM (\e -> putStrLn ("saved state not loaded: " <> e) >> pure Nothing) (pure . Just) $
+            getLocalStorage storageKey
     startApp
         app
             { model = fromMaybe app.model savedModel
@@ -236,8 +235,8 @@ tcBasicProg p ASTDef{..} =
     runTC
         . flip (runReaderT @_ @(M TypeError)) (progCxt p)
         $ ASTDefT
-        <$> (check (forgetTypeMetadata astDefType) astDefExpr)
-        <*> (checkKind (KType ()) astDefType)
+            <$> (check (forgetTypeMetadata astDefType) astDefExpr)
+            <*> (checkKind (KType ()) astDefType)
 
 -- TODO this is all basically copied from unexposed parts of Primer library - find a way to expose
 newtype M e a = M {unM :: StateT (ID, NameCounter) (Except e) a}
