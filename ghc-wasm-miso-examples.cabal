@@ -26,6 +26,7 @@ executable ghc-wasm-miso-examples
     ghc-options: -Wall -Wunused-packages -Wno-name-shadowing -Wredundant-constraints
     other-modules:
       App
+      Colours
       Layout
       Primer
       SimpleCounter
