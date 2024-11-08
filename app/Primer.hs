@@ -271,8 +271,8 @@ viewTreeExpr e =
                         CaseFallback r -> [Tree.Node (mkNodeView (SyntaxNode False yellowPrimary "_") [] []) [viewTreeExpr r]]
         _ ->
             map
-                (\name -> Tree.Node (mkNodeView VarNode{name, mscope = Nothing} [] []) [])
-                (e ^.. typeBindingsInExpr % to unLocalName <> e ^.. bindingsInExpr % to unLocalName)
+                (\(name, as) -> Tree.Node (mkNodeView VarNode{name, mscope = Nothing} as []) [])
+                (e ^.. typeBindingsInExpr % to ((,[]) . unLocalName) <> e ^.. bindingsInExpr % to ((,rounded) . unLocalName))
                 <> map viewTreeType (e ^.. typesInExpr)
                 <> map viewTreeExpr (children e)
 
