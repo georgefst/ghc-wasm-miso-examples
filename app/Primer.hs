@@ -372,7 +372,7 @@ viewTree t@(Tree.Node NodeView{height = rootHeight} _) =
                 )
                 t
 
--- padding = 0
+padding :: Double
 padding = 20
 
 -- TODO upstream: https://github.com/dmjio/miso/issues/749
