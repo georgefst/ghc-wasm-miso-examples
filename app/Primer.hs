@@ -191,7 +191,7 @@ mkNodeView opts extraOuterStyles extraInnerStyles =
                     PatternBoxNode{} -> yellowPrimary
                 backgroundColor = case opts of
                     SyntaxNode{..} -> color
-                    PatternBoxNode{} -> yellowPrimary <> "33" -- 1/5 opacity
+                    PatternBoxNode{} -> "#fff1df"
                     _ -> whitePrimary
         }
   where
