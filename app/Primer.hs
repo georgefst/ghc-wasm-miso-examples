@@ -527,7 +527,7 @@ nodeSelectionType =
 
 -- TODO inline?
 mapTreeWithChildren :: (a -> [Tree b] -> b) -> Tree a -> [b]
-mapTreeWithChildren  = \f -> toList @Tree . Tree.foldTree \a bs -> Tree.Node (f a bs) bs
+mapTreeWithChildren = \f -> toList @Tree . Tree.foldTree \a bs -> Tree.Node (f a bs) bs
 
 getTreeRoot :: Tree a -> a
 -- getTreeRoot = fromMaybe undefined . head
