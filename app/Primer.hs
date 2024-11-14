@@ -4,6 +4,8 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -328,30 +330,72 @@ viewTreeKind k =
 -- well, kind of, since the thing that comes out is not a view of a single node
 -- even if in the case of patterns, we do then box it up and use it as one
 viewTree :: Tree (NodeView action) -> (NodeView action)
-viewTree t@(Tree.Node NodeView{height = rootHeight} _) =
+viewTree t =
     -- TODO consider taking top-level attributes and `Tree ([Attribute action] -> View action)`
     -- in order to avoid so many nested `div`s
     NodeView
         { view =
             div_ [style_ [("padding", show (padding / 2) <> "px")]] $
-                map
-                    ( \(node, P2 x y) ->
-                        div_
-                            [ style_
-                                [ ("position", "absolute")
-                                ,
-                                    ( "transform"
-                                    , "translate("
-                                        <> show (x - node.width / 2)
-                                        <> "px,"
-                                        <> show (-y - node.height / 2 + rootHeight / 2)
-                                        <> "px)"
-                                    )
-                                ]
-                            ]
-                            [node.view]
-                    )
-                    nodes
+                map fst $
+                    mapTreeWithChildren
+                        ( \(node, P2 x y) (map (getTreeRoot . map snd) -> subs) ->
+                            (,(P2 x y))
+                                $ div_
+                                    []
+                                $ div_
+                                    [ style_
+                                        [ ("position", "absolute")
+                                        ,
+                                            ( "transform"
+                                            , "translate("
+                                                <> show (x - node.width / 2)
+                                                <> "px,"
+                                                <> show (-y - node.height / 2 + (getTreeRoot t).height / 2)
+                                                <> "px)"
+                                            )
+                                        ]
+                                    ]
+                                    [node.view]
+                                    : map
+                                        ( \p ->
+                                            let
+                                                -- TODO use `linear` for this stuff?
+                                                -- TODO curved lines would be nicer
+                                                dx = p.x - x
+                                                dy = p.y - y
+                                                theta = atan2 -dy dx
+                                                size = sqrt $ dx ** 2 + dy ** 2
+                                             in
+                                                div_
+                                                    [ style_
+                                                        [ ("position", "absolute")
+                                                        , ("transform-origin", "left")
+                                                        , ("z-index", "-1")
+                                                        ,
+                                                            ( "transform"
+                                                            , "translate("
+                                                                <> show x
+                                                                <> "px,"
+                                                                <> show (-y + (getTreeRoot t).height / 2)
+                                                                <> "px) rotate("
+                                                                <> show theta
+                                                                -- <> show 0
+                                                                <> "rad)"
+                                                            )
+                                                        , ("border-style", "solid")
+                                                        , ("border-color", greySecondary) -- TODO match parent colour...
+                                                        , ("border-width", ".125rem")
+                                                        , ("height", "0px")
+                                                        , ("width", show size <> "px")
+                                                        -- , ("border-width", ".25rem")
+                                                        -- , ("box-sizing", "border-box")
+                                                        ]
+                                                    ]
+                                                    []
+                                        )
+                                        subs
+                        )
+                        nodes'
         , width = maxX - minX
         , height = maxY - minY
         }
@@ -361,16 +405,16 @@ viewTree t@(Tree.Node NodeView{height = rootHeight} _) =
     maxX = maximum $ map ((\(v, p) -> p.x + v.width / 2)) nodes
     minY = minimum $ map ((\(v, p) -> p.y - v.height / 2)) nodes
     maxY = maximum $ map ((\(v, p) -> p.y + v.height / 2)) nodes
-    nodes =
-        toList $
-            symmLayout' @Double
-                ( def
-                    & (slHSep .~ padding)
-                    & (slVSep .~ padding)
-                    & (slWidth .~ \node -> (-(node.width / 2), node.width / 2))
-                    & (slHeight .~ \node -> (-(node.height / 2), node.height / 2))
-                )
-                t
+    nodes = toList nodes'
+    nodes' =
+        symmLayout' @Double
+            ( def
+                & (slHSep .~ padding)
+                & (slVSep .~ padding)
+                & (slWidth .~ \node -> (-(node.width / 2), node.width / 2))
+                & (slHeight .~ \node -> (-(node.height / 2), node.height / 2))
+            )
+            t
 
 padding :: Double
 padding = 20
@@ -480,3 +524,12 @@ nodeSelectionType =
             THole{} -> True
             TEmptyHole{} -> True
             _ -> False
+
+-- TODO inline?
+mapTreeWithChildren :: (a -> [Tree b] -> b) -> Tree a -> [b]
+mapTreeWithChildren  = \f -> toList @Tree . Tree.foldTree \a bs -> Tree.Node (f a bs) bs
+
+getTreeRoot :: Tree a -> a
+-- getTreeRoot = fromMaybe undefined . head
+-- getTreeRoot = Comonad.extract
+getTreeRoot (Tree.Node n _) = n
