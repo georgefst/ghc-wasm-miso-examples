@@ -7,6 +7,7 @@ Differences from upstream:
 - Vendor some further required definitions from the `diagrams` family. These are all in one block at the very top of the module body.
 - Add `NoLexicalNegation` to override this package's default, in order to avoid a syntax error in `unRelativize`.
 - Use `optics` instead of `lens`.
+- Make some adjustments so that y-coordinates are always non-negative, with the root being at zero.
 -}
 {-# LANGUAGE DeriveFoldable            #-}
 {-# LANGUAGE DeriveFunctor             #-}
@@ -30,7 +31,7 @@ module Layout
        , P2
        ) where
 
-import           Control.Arrow       ((&&&), (***))
+import           Control.Arrow       ((&&&), (***), second)
 
 import           Data.Default
 import           Data.List           (mapAccumL)
@@ -222,7 +223,10 @@ symmLayoutR opts (Node a ts) = (rt, ext)
 -- | Run the symmetric rose tree layout algorithm on a given tree,
 --   resulting in the same tree annotated with node positions.
 symmLayout' :: (Fractional n, Ord n) => SymmLayoutOpts n a -> Tree a -> Tree (a, P2 n)
-symmLayout' opts = unRelativize opts origin . fst . symmLayoutR opts
+symmLayout' opts t0 =
+    let t = unRelativize opts origin $ fst $ symmLayoutR opts t0
+        rootHeight = snd $ fst (rootLabel t) & opts ^. slHeight
+     in second (\(P (V2 x y)) -> P $ V2 x (rootHeight - y)) <$> t
 
 -- | Run the symmetric rose tree layout algorithm on a given tree
 --   using default options, resulting in the same tree annotated with

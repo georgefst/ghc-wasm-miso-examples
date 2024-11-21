@@ -27,8 +27,8 @@ import Data.Tree (Tree)
 import Data.Tree qualified as Tree
 import GHC.Base (error)
 import Layout
-import Linear (R1 (_x), R2 (_y), V2)
-import Linear.Affine (Point (..), unP)
+import Linear (R1 (_x), R2 (_y), V2 (V2))
+import Linear.Affine (Point (..), unP, (.+^), (.-^))
 import Miso hiding (P)
 import Optics hiding (view)
 import Optics.State.Operators ((<<%=), (?=))
@@ -93,12 +93,12 @@ viewModel Model{..} =
                 , ("justify-items", "center")
                 ]
             ]
-            [ SelectNode . NodeSelection SigNode <$> (viewTree $ viewTreeType def.sig).view
-            , SelectNode . NodeSelection BodyNode <$> (viewTree $ viewTreeExpr def.expr).view
+            [ SelectNode . NodeSelection SigNode <$> viewTree (viewTreeType def.sig)
+            , SelectNode . NodeSelection BodyNode <$> viewTree (viewTreeExpr def.expr)
             , case selection of
                 Nothing -> "no selection"
                 Just s ->
-                    NoOp "clicked non-interactive node" <$ (.view) case nodeSelectionType s of
+                    NoOp "clicked non-interactive node" <$ case nodeSelectionType s of
                         Left t -> viewTree $ viewTreeType t
                         Right (Left t) -> viewTree $ viewTreeKind t
                         -- TODO this isn't really correct - kinds in Primer don't have kinds
@@ -106,34 +106,25 @@ viewModel Model{..} =
             ]
         ]
 
--- | A renderable node with dimensions.
-data NodeView action = NodeView
-    { view :: View action
-    , width :: Double
-    , height :: Double
-    }
-    deriving (Generic)
-
 data NodeViewData
     = SyntaxNode {wide :: Bool, color :: Text, text :: Text}
     | HoleNode {empty :: Bool}
     | PrimNode PrimCon
     | ConNode {name :: Name, scope :: ModuleName}
     | VarNode {name :: Name, mscope :: Maybe ModuleName} -- TODO we should be able to re-use the name `scope`: https://github.com/ghc-proposals/ghc-proposals/pull/535#issuecomment-1694388075
-    | PatternBoxNode {width :: Double, height :: Double}
+    | PatternBoxNode (forall action. MeasuredView action)
 
-mkNodeView :: NodeViewData -> Map Text Text -> Map Text Text -> NodeView action
-mkNodeView opts extraOuterStyles extraInnerStyles =
-    NodeView
-        { width
-        , height
+viewNode :: NodeViewData -> Map Text Text -> Map Text Text -> MeasuredView action
+viewNode opts extraOuterStyles extraInnerStyles =
+    MeasuredView
+        { dimensions
         , view = case opts of
             PrimNode (PrimAnimation animation) ->
                 img_
                     [ src_ ("data:img/gif;base64," <> animation)
                     , style_ $
-                        [ ("width", show width <> "px")
-                        , ("height", show height <> "px")
+                        [ ("width", show dimensions.x <> "px")
+                        , ("height", show dimensions.y <> "px")
                         ]
                             <> extraOuterStyles
                             <> extraInnerStyles
@@ -148,11 +139,9 @@ mkNodeView opts extraOuterStyles extraInnerStyles =
                         , ("box-sizing", "border-box")
                         , ("border-color", borderColor)
                         , ("background-color", backgroundColor)
-                        , ("width", show width <> "px")
-                        , ("height", show height <> "px")
+                        , ("width", show dimensions.x <> "px")
+                        , ("height", show dimensions.y <> "px")
                         , ("border-width", ".25rem")
-                        , ("padding-left", ".25rem")
-                        , ("padding-right", ".25rem")
                         ]
                             <> case opts of
                                 HoleNode{} -> [("font-style", "italic")]
@@ -160,7 +149,15 @@ mkNodeView opts extraOuterStyles extraInnerStyles =
                             <> extraOuterStyles
                     ]
                     case opts of
-                        PatternBoxNode{} -> []
+                        PatternBoxNode p ->
+                            [ div_
+                                [ style_
+                                    [ ("position", "absolute")
+                                    , ("top", show (boxPadding / 2) <> "px")
+                                    ]
+                                ]
+                                [p.view]
+                            ]
                         _ ->
                             [ div_
                                 [ style_ $
@@ -199,28 +196,26 @@ mkNodeView opts extraOuterStyles extraInnerStyles =
                     _ -> whitePrimary
         }
   where
-    width = case opts of
-        PatternBoxNode{width} -> width + boxPadding
-        SyntaxNode{wide = False} -> height
-        _ -> 80
-    height = case opts of
-        PatternBoxNode{height} -> height + boxPadding
-        _ -> 35
     boxPadding = 55
+    basicDims = V2 80 35
+    dimensions = case opts of
+        PatternBoxNode p -> p.dimensions + pure boxPadding
+        SyntaxNode{wide = False} -> basicDims & lensVL _x .~ basicDims.y
+        _ -> basicDims
 
 viewTreeExpr ::
     (Data a, Data b, Data c) =>
     Expr' a b c ->
-    Tree.Tree (NodeView (TermMeta' a b c))
+    Tree.Tree (MeasuredView (TermMeta' a b c))
 viewTreeExpr e =
     Tree.Node
         ( over #view (div_ [onClick $ Left $ e ^. _exprMetaLens] . pure) $
-            mkNodeView viewNode rounded []
+            viewNode nodeView rounded []
         )
-        viewChildren
+        childViews
   where
     rounded = [("border-radius", "1.5rem")] -- Curved nodes to indicate value-level expressions.
-    viewNode = case e of
+    nodeView = case e of
         Hole{} -> HoleNode{empty = False}
         EmptyHole{} -> HoleNode{empty = False}
         Ann{} -> SyntaxNode False blackPrimary ":"
@@ -236,46 +231,29 @@ viewTreeExpr e =
         Letrec{} -> SyntaxNode False blueQuaternary "let rec"
         PrimCon _ c -> PrimNode c
         Case{} -> SyntaxNode True yellowPrimary "match"
-    viewChildren = case e of
+    childViews = case e of
         Case _ scrut branches fb ->
             mconcat
                 [ [viewTreeExpr scrut]
                 , branches <&> \(CaseBranch p bindings r) ->
-                    let
-                        con = case p of
-                            PatCon c -> mkNodeView ConNode{name = baseName c, scope = qualifiedModule c} rounded []
-                            PatPrim c -> mkNodeView (PrimNode c) rounded []
-                        pattern =
-                            viewTree $
-                                Tree.Node con $
-                                    bindings <&> \(Bind _ v) ->
-                                        Tree.Node
-                                            (mkNodeView VarNode{name = unLocalName v, mscope = Nothing} rounded [])
-                                            []
-                        box = mkNodeView (PatternBoxNode pattern.width pattern.height) rounded []
-                     in
-                        Tree.Node
-                            NodeView
-                                { width = box.width
-                                , height = box.height
-                                , view =
-                                    div_
-                                        []
-                                        [ box.view
-                                        , div_
-                                            [ style_
-                                                [ ("position", "absolute")
-                                                , ("left", show (box.width / 2 - padding / 2) <> "px")
-                                                , ("top", show ((box.height - pattern.height) / 2 - padding / 2) <> "px")
-                                                ]
-                                            ]
-                                            [pattern.view]
-                                        ]
-                                }
-                            [viewTreeExpr r]
+                    Tree.Node
+                        ( viewNode
+                            ( PatternBoxNode
+                                ( viewTreeWithDimensions False
+                                    $ Tree.Node case p of
+                                        PatCon c -> viewNode ConNode{name = baseName c, scope = qualifiedModule c} rounded []
+                                        PatPrim c -> viewNode (PrimNode c) rounded []
+                                    $ bindings <&> \(Bind _ v) ->
+                                        Tree.Node (viewNode VarNode{name = unLocalName v, mscope = Nothing} rounded []) []
+                                )
+                            )
+                            rounded
+                            []
+                        )
+                        [viewTreeExpr r]
                 , case fb of
                     CaseExhaustive -> []
-                    CaseFallback r -> [Tree.Node (mkNodeView (SyntaxNode False yellowPrimary "_") [] []) [viewTreeExpr r]]
+                    CaseFallback r -> [Tree.Node (viewNode (SyntaxNode False yellowPrimary "_") [] []) [viewTreeExpr r]]
                 ]
         _ ->
             mconcat
@@ -285,20 +263,20 @@ viewTreeExpr e =
                 , map viewTreeExpr (children e)
                 ]
           where
-            viewTreeBinding as name = Tree.Node (mkNodeView VarNode{name = unLocalName name, mscope = Nothing} as []) []
+            viewTreeBinding as name = Tree.Node (viewNode VarNode{name = unLocalName name, mscope = Nothing} as []) []
 
 viewTreeType ::
     (Data b, Data c) =>
     Type' b c ->
-    (Tree.Tree (NodeView (TermMeta' a b c)))
+    (Tree.Tree (MeasuredView (TermMeta' a b c)))
 viewTreeType t =
     Tree.Node
         ( over #view (div_ [onClick $ Right $ Left $ t ^. _typeMetaLens] . pure) $
-            mkNodeView viewNode [] []
+            viewNode nodeView [] []
         )
-        viewChildren
+        childViews
   where
-    viewNode = case t of
+    nodeView = case t of
         TEmptyHole{} -> HoleNode{empty = True}
         THole{} -> HoleNode{empty = True}
         TCon _ c -> ConNode{name = baseName c, scope = qualifiedModule c}
@@ -307,79 +285,83 @@ viewTreeType t =
         TApp{} -> SyntaxNode False blueTertiary "←"
         TForall{} -> SyntaxNode False blueSecondary "∀"
         TLet{} -> SyntaxNode False blueQuaternary "let"
-    viewChildren =
+    childViews =
         map
-            (\name -> Tree.Node (mkNodeView VarNode{name, mscope = Nothing} [] []) [])
+            (\name -> Tree.Node (viewNode VarNode{name, mscope = Nothing} [] []) [])
             (t ^.. bindingsInType % to unLocalName)
             <> map viewTreeKind (t ^.. kindsInType)
             <> map viewTreeType (children t)
 
-viewTreeKind :: (Data c) => Kind' c -> Tree.Tree (NodeView (TermMeta' a b c))
+viewTreeKind :: (Data c) => Kind' c -> Tree.Tree (MeasuredView (TermMeta' a b c))
 viewTreeKind k =
     Tree.Node
         ( over #view (div_ [onClick $ Right $ Right $ k ^. _kindMetaLens] . pure) $
-            mkNodeView
-                viewNode
+            viewNode
+                nodeView
                 -- Rotate to indicate kind.
                 -- We then scale by (1 + 1/√2)/2 so that dimensions used for layout are a good approximation.
                 [("transform", "rotate(45deg) scale(0.854)")]
                 -- Rotate the content back to it's correct orientation.
                 [("transform", "rotate(-45deg)")]
         )
-        viewChildren
+        childViews
   where
-    viewNode = case k of
+    nodeView = case k of
         KHole{} -> HoleNode{empty = True}
         KType{} -> SyntaxNode False greenPrimary "*"
         KFun{} -> SyntaxNode False bluePrimary "→"
-    viewChildren = map viewTreeKind (children k)
+    childViews = map viewTreeKind (children k)
 
-viewTree :: Tree (NodeView action) -> NodeView action
-viewTree t@(Tree.Node NodeView{height = rootHeight} _) =
-    -- TODO consider taking top-level attributes and `Tree ([Attribute action] -> View action)`
-    -- in order to avoid so many nested `div`s
-    NodeView
-        { view =
-            div_ [style_ [("padding", show (padding / 2) <> "px")]]
+viewTree :: Tree (MeasuredView action) -> View action
+viewTree = (.view) . viewTreeWithDimensions True
+
+viewTreeWithDimensions ::
+    -- | Apply the same padding we use between nodes to the entire tree.
+    -- Should be `False` for nested trees.
+    Bool ->
+    Tree (MeasuredView action) ->
+    MeasuredView action
+viewTreeWithDimensions outerPadding t =
+    MeasuredView
+        { dimensions = bottomRight - topLeft
+        , view =
+            div_ (mwhen outerPadding [style_ [("padding", show (padding / 2) <> "px")]])
                 $ map
-                    ( \(node, P2 x y) ->
-                        div_
-                            [ style_
-                                [ ("position", "absolute")
-                                ,
-                                    ( "transform"
-                                    , "translate("
-                                        <> show (x - node.width / 2)
-                                        <> "px,"
-                                        <> show (-y - node.height / 2 + rootHeight / 2)
-                                        <> "px)"
-                                    )
+                    ( \(node, p) ->
+                        let offset = p .-^ node.dimensions / 2
+                         in div_
+                                [ style_
+                                    [ ("position", "absolute")
+                                    ,
+                                        ( "transform"
+                                        , "translate("
+                                            <> show offset.x
+                                            <> "px,"
+                                            <> show offset.y
+                                            <> "px)"
+                                        )
+                                    ]
                                 ]
-                            ]
-                            [node.view]
+                                [node.view]
                     )
                 $ toList nodes
-        , width = maxX - minX
-        , height = maxY - minY
         }
   where
-    minX = minimum $ map ((\(v, p) -> p.x - v.width / 2)) nodes
-    maxX = maximum $ map ((\(v, p) -> p.x + v.width / 2)) nodes
-    minY = minimum $ map ((\(v, p) -> p.y - v.height / 2)) nodes
-    maxY = maximum $ map ((\(v, p) -> p.y + v.height / 2)) nodes
+    mins = map (\(v, p) -> p .-^ v.dimensions / 2) nodes
+    topLeft = V2 (minimum $ map (.x) mins) (minimum $ map (.y) mins)
+    maxs = map (\(v, p) -> p .+^ v.dimensions / 2) nodes
+    bottomRight = V2 (maximum $ map (.x) maxs) (maximum $ map (.y) maxs)
     nodes =
         toNonEmpty $
             symmLayout' @Double
                 ( def
                     & (slHSep .~ padding)
                     & (slVSep .~ padding)
-                    & (slWidth .~ \node -> (-(node.width / 2), node.width / 2))
-                    & (slHeight .~ \node -> (-(node.height / 2), node.height / 2))
+                    & (slWidth .~ \node -> (-(node.dimensions.x / 2), node.dimensions.x / 2))
+                    & (slHeight .~ \node -> (-(node.dimensions.y / 2), node.dimensions.y / 2))
                 )
                 t
-
-padding :: Double
-padding = 20
+    padding = 20
 
 -- TODO upstream: https://github.com/dmjio/miso/issues/749
 startAppWithSavedState :: forall model action. (Eq model, FromJSON model, ToJSON model) => Miso.App model action -> JSM ()
@@ -508,3 +490,9 @@ instance HasField "y" (V2 a) a where
     getField = (^. lensVL _y)
 instance (HasField "y" (f a) a) => HasField "y" (Point f a) a where
     getField = getField @"y" . unP
+
+data MeasuredView action = MeasuredView
+    { view :: View action
+    , dimensions :: V2 Double
+    }
+    deriving (Generic)
