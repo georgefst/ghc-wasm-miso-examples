@@ -9,9 +9,11 @@ executable ghc-wasm-miso-examples
       , base
       , bytestring
       , containers
+      , data-default
       , extra
       , hs2048
       , jsaddle
+      , linear
       , miso
       , mtl
       , optics
