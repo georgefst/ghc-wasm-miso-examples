@@ -337,16 +337,16 @@ viewTree t@(Tree.Node NodeView{height = rootHeight} _) =
         { view =
             div_ [style_ [("padding", show (padding / 2) <> "px")]]
                 $ map
-                    ( \(node, P2 x y) ->
+                    ( \(node, p) ->
                         div_
                             [ style_
                                 [ ("position", "absolute")
                                 ,
                                     ( "transform"
                                     , "translate("
-                                        <> show (x - node.width / 2)
+                                        <> show (p.x - node.width / 2)
                                         <> "px,"
-                                        <> show (-y - node.height / 2 + rootHeight / 2)
+                                        <> show (-p.y - node.height / 2 + rootHeight / 2)
                                         <> "px)"
                                     )
                                 ]
