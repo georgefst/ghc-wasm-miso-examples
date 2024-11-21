@@ -38,8 +38,9 @@ if $dev_mode; then
     cp "$hs_wasm_path" dist/bin.wasm
 else
     wizer --allow-wasi --wasm-bulk-memory true --init-func _initialize -o dist/bin.wasm "$hs_wasm_path"
-    wasm-opt ${1+"$@"} dist/bin.wasm -o dist/bin.wasm
-    wasm-tools strip -o dist/bin.wasm dist/bin.wasm
+    wasm-opt ${1+"$@"} dist/bin.wasm -o dist/bin-opt.wasm
+    wasm-tools strip -o dist/bin-stripped.wasm dist/bin-opt.wasm
+    gzip -k dist/bin-stripped.wasm
 fi
 
 cp ./*.js dist
