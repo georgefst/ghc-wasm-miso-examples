@@ -3,6 +3,7 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -193,14 +194,11 @@ viewTreeExpr ::
 viewTreeExpr e =
     Tree.Node
         ( over #view (div_ [onClick $ Left $ e ^. _exprMetaLens] . pure) $
-            mkNodeView
-                viewNode
-                -- Curved nodes to indicate value-level expressions.
-                [("border-radius", "1.5rem")]
-                []
+            mkNodeView viewNode rounded []
         )
         viewChildren
   where
+    rounded = [("border-radius", "1.5rem")] -- Curved nodes to indicate value-level expressions.
     viewNode = case e of
         Hole{} -> HoleNode{empty = False}
         EmptyHole{} -> HoleNode{empty = False}
@@ -208,8 +206,8 @@ viewTreeExpr e =
         Primer.App{} -> SyntaxNode False blueTertiary "←"
         APP{} -> SyntaxNode False blueTertiary "←"
         Con _ c _ -> ConNode{name = baseName c, scope = qualifiedModule c}
-        Lam _ v _ -> SyntaxNode False bluePrimary $ "λ" <> unName (unLocalName v)
-        LAM _ v _ -> SyntaxNode False blueSecondary $ "Λ" <> unName (unLocalName v)
+        Lam{} -> SyntaxNode False bluePrimary "λ"
+        LAM{} -> SyntaxNode False blueSecondary "Λ"
         Var _ (GlobalVarRef v) -> VarNode{name = baseName v, mscope = Just $ qualifiedModule v}
         Var _ (LocalVarRef v) -> VarNode{name = unLocalName v, mscope = Nothing}
         Let{} -> SyntaxNode False blueQuaternary "let"
@@ -246,7 +244,15 @@ viewTreeExpr e =
                     <> case fb of
                         CaseExhaustive -> []
                         CaseFallback r -> [Tree.Node (mkNodeView (SyntaxNode False yellowPrimary "_") [] []) [viewTreeExpr r]]
-        _ -> map viewTreeType (e ^.. typesInExpr) <> map viewTreeExpr (children e)
+        _ ->
+            mconcat
+                [ map (viewTreeBinding []) (e ^.. typeBindingsInExpr)
+                , map (viewTreeBinding rounded) (e ^.. bindingsInExpr)
+                , map viewTreeType (e ^.. typesInExpr)
+                , map viewTreeExpr (children e)
+                ]
+          where
+            viewTreeBinding as name = Tree.Node (mkNodeView VarNode{name = unLocalName name, mscope = Nothing} as []) []
 
 viewTreeType ::
     (Data b, Data c) =>
@@ -266,9 +272,14 @@ viewTreeType t =
         TFun{} -> SyntaxNode False bluePrimary "→"
         TVar _ v -> VarNode{name = unLocalName v, mscope = Nothing}
         TApp{} -> SyntaxNode False blueTertiary "←"
-        TForall _ v _ _ -> SyntaxNode False blueSecondary $ "∀" <> unName (unLocalName v)
+        TForall{} -> SyntaxNode False blueSecondary "∀"
         TLet{} -> SyntaxNode False blueQuaternary "let"
-    viewChildren = map viewTreeKind (t ^.. kindsInType) <> map viewTreeType (children t)
+    viewChildren =
+        map
+            (\name -> Tree.Node (mkNodeView VarNode{name, mscope = Nothing} [] []) [])
+            (t ^.. bindingsInType % to unLocalName)
+            <> map viewTreeKind (t ^.. kindsInType)
+            <> map viewTreeType (children t)
 
 viewTreeKind :: (Data c) => Kind' c -> Tree.Tree (NodeView (TermMeta' a b c))
 viewTreeKind k =
@@ -383,6 +394,24 @@ data ASTDefT = ASTDefT {expr :: ExprT, sig :: TypeT} -- TODO parameterise `ASTDe
 kindsInType :: AffineTraversal' (Type' a b) (Kind' b)
 kindsInType = atraversalVL $ \point f -> \case
     TForall m a k t -> flip (TForall m a) t <$> f k
+    e -> point e
+
+-- TODO if we had first-class bindings, we could probably implement all of these generically
+bindingsInExpr :: AffineTraversal' (Expr' a b c) LVarName
+bindingsInExpr = atraversalVL $ \point f -> \case
+    Lam m v e -> f v <&> \v' -> Lam m v' e
+    Let m v e1 e2 -> f v <&> \v' -> Let m v' e1 e2
+    Letrec m v e1 t e2 -> f v <&> \v' -> Letrec m v' e1 t e2
+    e -> point e
+typeBindingsInExpr :: AffineTraversal' (Expr' a b c) TyVarName
+typeBindingsInExpr = atraversalVL $ \point f -> \case
+    LAM m v e -> f v <&> \v' -> LAM m v' e
+    LetType m v t e -> f v <&> \v' -> LetType m v' t e
+    e -> point e
+bindingsInType :: AffineTraversal' (Type' a b) TyVarName
+bindingsInType = atraversalVL $ \point f -> \case
+    TForall m v k t -> f v <&> \v' -> TForall m v' k t
+    TLet m v t1 t2 -> f v <&> \v' -> TLet m v' t1 t2
     e -> point e
 
 -- TODO generalise to full selections and DRY with `getSelectionTypeOrKind` from `primer-api`
