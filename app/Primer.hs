@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE DuplicateRecordFields #-}
@@ -7,6 +8,7 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NoFieldSelectors #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module Primer (start) where
 
@@ -17,6 +19,7 @@ import Control.Monad.Extra (eitherM)
 import Control.Monad.Fresh (MonadFresh (..))
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data (Data (..))
+import Data.Default (Default (..))
 import Data.Foldable1 qualified
 import Data.Generics.Uniplate.Data (children)
 import Data.Map qualified as Map
@@ -24,7 +27,9 @@ import Data.Tree (Tree)
 import Data.Tree qualified as Tree
 import GHC.Base (error)
 import Layout
-import Miso
+import Linear (R1 (_x), R2 (_y), V2)
+import Linear.Affine (Point (..), unP)
+import Miso hiding (P)
 import Optics hiding (view)
 import Optics.State.Operators ((<<%=), (?=))
 import Primer.App
@@ -490,3 +495,16 @@ maximum :: (Foldable1 t) => t Double -> Double
 maximum = Data.Foldable1.maximum
 toNonEmpty :: (Foldable1 t) => t a -> NonEmpty a
 toNonEmpty = Data.Foldable1.toNonEmpty
+
+-- this style would be simplest but isn't possible due to the implementation of `OverloadedRecordDot`:
+-- instance R1 t => HasField "x" (t a) a where
+--     getField = flip (^.) $ lensVL _x
+-- this might be too ad-hoc to get accepted upstream
+instance HasField "x" (V2 a) a where
+    getField = (^. lensVL _x)
+instance (HasField "x" (f a) a) => HasField "x" (Point f a) a where
+    getField = getField @"x" . unP
+instance HasField "y" (V2 a) a where
+    getField = (^. lensVL _y)
+instance (HasField "y" (f a) a) => HasField "y" (Point f a) a where
+    getField = getField @"y" . unP

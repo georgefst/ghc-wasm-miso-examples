@@ -4,7 +4,7 @@ We can't use `diagrams-contrib` since it pulls in `diagrams-lib`, which in turn 
 
 Differences from upstream:
 - Remove everything but the simple symmetric layout algorithm.
-- Vendor some further required definitions from `diagrams-contrib`'s own dependencies, mostly from `linear`. These are all in one block at the very top of the module body. It might be possible to depend on `linear` instead, now that we have Template Haskell support for WASM.
+- Vendor some further required definitions from the `diagrams` family. These are all in one block at the very top of the module body.
 - Add `NoLexicalNegation` to override this package's default, in order to avoid a syntax error in `unRelativize`.
 - Use `optics` instead of `lens`.
 -}
@@ -27,34 +27,37 @@ module Layout
        , symmLayout'
        , SymmLayoutOpts(..), slHSep, slVSep, slWidth, slHeight
 
-       , P2(..)
-       , Default(..)
-
+       , P2
        ) where
 
 import           Control.Arrow       ((&&&), (***))
 
+import           Data.Default
 import           Data.List           (mapAccumL)
 import           Data.Tree
 
+import           Linear
+import           Linear.Affine
+
 import Optics hiding (Empty)
 
-data P2 a = P2{x :: a, y :: a} deriving (Eq, Show, Functor)
-origin :: Num a => P2 a
-origin = P2 0 0
-class Default a where def :: a
-unitX :: Num a => P2 a
-unitX = P2 1 0
--- unit_X :: Num a => P2 a
--- unit_X = P2 (-1) 0
--- unitY :: Num a => P2 a
--- unitY = P2 0 1
-unit_Y :: Num a => P2 a
-unit_Y = P2 0 (-1)
-(*^) :: Num a => a -> P2 a -> P2 a
-(*^) a = fmap (a *)
-(.+^) :: Num a => P2 a -> P2 a -> P2 a
-P2 x1 y1 .+^ P2 x2 y2 = P2 (x1 + x2) (y1 + y2)
+type P2 = Point V2
+
+-- | The unit vector in the positive X direction.
+unitX :: (R1 v, Additive v, Num n) => v n
+unitX = zero & lensVL _x .~ 1
+
+-- | The unit vector in the negative X direction.
+-- unit_X :: (R1 v, Additive v, Num n) => v n
+-- unit_X = zero & lensVL _x .~ (-1)
+
+-- | The unit vector in the positive Y direction.
+-- unitY :: (R2 v, Additive v, Num n) => v n
+-- unitY = zero & lensVL _y .~ 1
+
+-- | The unit vector in the negative Y direction.
+unit_Y :: (R2 v, Additive v, Num n) => v n
+unit_Y = zero & lensVL _y .~ (-1)
 
 ------------------------------------------------------------
 --  Binary trees
