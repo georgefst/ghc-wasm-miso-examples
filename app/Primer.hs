@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE OverloadedLists #-}
 {-# LANGUAGE OverloadedRecordDot #-}
@@ -9,13 +10,14 @@
 
 module Primer (start) where
 
-import Foreword
+import Foreword hiding (minimum)
 
 import Colours
 import Control.Monad.Extra (eitherM)
 import Control.Monad.Fresh (MonadFresh (..))
 import Data.Aeson (FromJSON, ToJSON)
 import Data.Data (Data (..))
+import Data.Foldable1 qualified
 import Data.Generics.Uniplate.Data (children)
 import Data.Map qualified as Map
 import Data.Tree (Tree)
@@ -86,12 +88,12 @@ viewModel Model{..} =
                 , ("justify-items", "center")
                 ]
             ]
-            [ SelectNode . NodeSelection SigNode <$> viewTree (viewTreeType def.sig)
-            , SelectNode . NodeSelection BodyNode <$> viewTree (viewTreeExpr def.expr)
+            [ SelectNode . NodeSelection SigNode <$> (viewTree $ viewTreeType def.sig).view
+            , SelectNode . NodeSelection BodyNode <$> (viewTree $ viewTreeExpr def.expr).view
             , case selection of
                 Nothing -> "no selection"
                 Just s ->
-                    NoOp "clicked non-interactive node" <$ case nodeSelectionType s of
+                    NoOp "clicked non-interactive node" <$ (.view) case nodeSelectionType s of
                         Left t -> viewTree $ viewTreeType t
                         Right (Left t) -> viewTree $ viewTreeKind t
                         -- TODO this isn't really correct - kinds in Primer don't have kinds
@@ -102,8 +104,8 @@ viewModel Model{..} =
 -- | A renderable node with dimensions.
 data NodeView action = NodeView
     { view :: View action
-    , width :: Int
-    , height :: Int
+    , width :: Double
+    , height :: Double
     }
     deriving (Generic)
 
@@ -113,6 +115,7 @@ data NodeViewData
     | PrimNode PrimCon
     | ConNode {name :: Name, scope :: ModuleName}
     | VarNode {name :: Name, mscope :: Maybe ModuleName} -- TODO we should be able to re-use the name `scope`: https://github.com/ghc-proposals/ghc-proposals/pull/535#issuecomment-1694388075
+    | PatternBoxNode {width :: Double, height :: Double}
 
 mkNodeView :: NodeViewData -> Map Text Text -> Map Text Text -> NodeView action
 mkNodeView opts extraOuterStyles extraInnerStyles =
@@ -140,7 +143,6 @@ mkNodeView opts extraOuterStyles extraInnerStyles =
                         , ("box-sizing", "border-box")
                         , ("border-color", borderColor)
                         , ("background-color", backgroundColor)
-                        , ("color", fontColor)
                         , ("width", show width <> "px")
                         , ("height", show height <> "px")
                         , ("border-width", ".25rem")
@@ -152,24 +154,32 @@ mkNodeView opts extraOuterStyles extraInnerStyles =
                                 _ -> []
                             <> extraOuterStyles
                     ]
-                    [ div_
-                        [ style_ $
-                            [ ("overflow", "hidden")
-                            , ("text-overflow", "ellipsis")
-                            , ("white-space", "nowrap")
+                    case opts of
+                        PatternBoxNode{} -> []
+                        _ ->
+                            [ div_
+                                [ style_ $
+                                    [ ("overflow", "hidden")
+                                    , ("text-overflow", "ellipsis")
+                                    , ("white-space", "nowrap")
+                                    , ("color", fontColor)
+                                    ]
+                                        <> extraInnerStyles
+                                ]
+                                [ text case opts of
+                                    SyntaxNode{text} -> text
+                                    HoleNode{empty} -> if empty then "?" else "⚠️"
+                                    PrimNode pc -> case pc of
+                                        PrimChar c' -> show c'
+                                        PrimInt n -> show n
+                                    ConNode{name} -> unName name
+                                    VarNode{name} -> unName name
+                                ]
                             ]
-                                <> extraInnerStyles
-                        ]
-                        [ text case opts of
-                            SyntaxNode{text} -> text
-                            HoleNode{empty} -> if empty then "?" else "⚠️"
-                            PrimNode pc -> case pc of
-                                PrimChar c' -> show c'
-                                PrimInt n -> show n
-                            ConNode{name} -> unName name
-                            VarNode{name} -> unName name
-                        ]
-                    ]
+                          where
+                            fontColor = case opts of
+                                SyntaxNode{} -> whitePrimary
+                                _ -> bluePrimary
               where
                 borderColor = case opts of
                     SyntaxNode{..} -> color
@@ -177,15 +187,21 @@ mkNodeView opts extraOuterStyles extraInnerStyles =
                     PrimNode{} -> greenPrimary
                     ConNode{} -> greenPrimary
                     VarNode{} -> blueQuaternary
-                (backgroundColor, fontColor) = case opts of
-                    SyntaxNode{..} -> (color, whitePrimary)
-                    _ -> (whitePrimary, bluePrimary)
+                    PatternBoxNode{} -> yellowPrimary
+                backgroundColor = case opts of
+                    SyntaxNode{..} -> color
+                    PatternBoxNode{} -> yellowPrimary <> "33" -- 1/5 opacity
+                    _ -> whitePrimary
         }
   where
     width = case opts of
+        PatternBoxNode{width} -> width + boxPadding
         SyntaxNode{wide = False} -> height
         _ -> 80
-    height = 35
+    height = case opts of
+        PatternBoxNode{height} -> height + boxPadding
+        _ -> 35
+    boxPadding = 55
 
 viewTreeExpr ::
     (Data a, Data b, Data c) =>
@@ -217,33 +233,45 @@ viewTreeExpr e =
         Case{} -> SyntaxNode True yellowPrimary "match"
     viewChildren = case e of
         Case _ scrut branches fb ->
-            viewTreeExpr scrut
-                : ( branches
-                        <&> \(CaseBranch p bindings r) ->
-                            Tree.Node
-                                ( NodeView
-                                    { width = 25 -- TODO just an approximation until we render patterns properly
-                                    , height = 25 -- TODO ditto
-                                    , view =
-                                        div_
+            mconcat
+                [ [viewTreeExpr scrut]
+                , branches <&> \(CaseBranch p bindings r) ->
+                    let
+                        con = case p of
+                            PatCon c -> mkNodeView ConNode{name = baseName c, scope = qualifiedModule c} rounded []
+                            PatPrim c -> mkNodeView (PrimNode c) rounded []
+                        pattern =
+                            viewTree $
+                                Tree.Node con $
+                                    bindings <&> \(Bind _ v) ->
+                                        Tree.Node
+                                            (mkNodeView VarNode{name = unLocalName v, mscope = Nothing} rounded [])
                                             []
-                                            $ ( text case p of
-                                                    PatCon c -> unName $ baseName c
-                                                    PatPrim c -> case c of
-                                                        PrimChar c' -> show c'
-                                                        PrimInt n -> show n
-                                                        -- This branch should never actually be triggered,
-                                                        -- since such programs can't be constructed.
-                                                        PrimAnimation _ -> "error: can't pattern match on animation"
-                                              )
-                                                : concatMap (\(Bind _ v) -> [text " ", text $ unName $ unLocalName v]) bindings
-                                    }
-                                )
-                                [viewTreeExpr r]
-                  )
-                    <> case fb of
-                        CaseExhaustive -> []
-                        CaseFallback r -> [Tree.Node (mkNodeView (SyntaxNode False yellowPrimary "_") [] []) [viewTreeExpr r]]
+                        box = mkNodeView (PatternBoxNode pattern.width pattern.height) rounded []
+                     in
+                        Tree.Node
+                            NodeView
+                                { width = box.width
+                                , height = box.height
+                                , view =
+                                    div_
+                                        []
+                                        [ box.view
+                                        , div_
+                                            [ style_
+                                                [ ("position", "absolute")
+                                                , ("left", show (box.width / 2 - padding / 2) <> "px")
+                                                , ("top", show ((box.height - pattern.height) / 2 - padding / 2) <> "px")
+                                                ]
+                                            ]
+                                            [pattern.view]
+                                        ]
+                                }
+                            [viewTreeExpr r]
+                , case fb of
+                    CaseExhaustive -> []
+                    CaseFallback r -> [Tree.Node (mkNodeView (SyntaxNode False yellowPrimary "_") [] []) [viewTreeExpr r]]
+                ]
         _ ->
             mconcat
                 [ map (viewTreeBinding []) (e ^.. typeBindingsInExpr)
@@ -301,39 +329,52 @@ viewTreeKind k =
         KFun{} -> SyntaxNode False bluePrimary "→"
     viewChildren = map viewTreeKind (children k)
 
-viewTree :: Tree (NodeView action) -> View action
-viewTree t@(Tree.Node NodeView{width = rootWidth, height = rootHeight} _) =
+viewTree :: Tree (NodeView action) -> NodeView action
+viewTree t@(Tree.Node NodeView{height = rootHeight} _) =
     -- TODO consider taking top-level attributes and `Tree ([Attribute action] -> View action)`
     -- in order to avoid so many nested `div`s
-    div_ [style_ [("padding", show (padding / 2) <> "px")]]
-        . map
-            ( \(node, P2 x y) ->
-                div_
-                    [ style_
-                        [ ("position", "absolute")
-                        ,
-                            ( "transform"
-                            , "translate("
-                                <> show (x - fromIntegral node.width / 2 - fromIntegral rootWidth / 2)
-                                <> "px,"
-                                <> show (-y - fromIntegral node.height + fromIntegral rootHeight)
-                                <> "px)"
-                            )
-                        ]
-                    ]
-                    [node.view]
-            )
-        . toList
-        $ symmLayout' @Double
-            ( def
-                & (slHSep .~ padding)
-                & (slVSep .~ padding)
-                & (slWidth .~ \node -> (-(fromIntegral node.width / 2), fromIntegral node.width / 2))
-                & (slHeight .~ \node -> (0, fromIntegral node.height))
-            )
-            t
+    NodeView
+        { view =
+            div_ [style_ [("padding", show (padding / 2) <> "px")]]
+                $ map
+                    ( \(node, P2 x y) ->
+                        div_
+                            [ style_
+                                [ ("position", "absolute")
+                                ,
+                                    ( "transform"
+                                    , "translate("
+                                        <> show (x - node.width / 2)
+                                        <> "px,"
+                                        <> show (-y - node.height / 2 + rootHeight / 2)
+                                        <> "px)"
+                                    )
+                                ]
+                            ]
+                            [node.view]
+                    )
+                $ toList nodes
+        , width = maxX - minX
+        , height = maxY - minY
+        }
   where
-    padding = 20
+    minX = minimum $ map ((\(v, p) -> p.x - v.width / 2)) nodes
+    maxX = maximum $ map ((\(v, p) -> p.x + v.width / 2)) nodes
+    minY = minimum $ map ((\(v, p) -> p.y - v.height / 2)) nodes
+    maxY = maximum $ map ((\(v, p) -> p.y + v.height / 2)) nodes
+    nodes =
+        toNonEmpty $
+            symmLayout' @Double
+                ( def
+                    & (slHSep .~ padding)
+                    & (slVSep .~ padding)
+                    & (slWidth .~ \node -> (-(node.width / 2), node.width / 2))
+                    & (slHeight .~ \node -> (-(node.height / 2), node.height / 2))
+                )
+                t
+
+padding :: Double
+padding = 20
 
 -- TODO upstream: https://github.com/dmjio/miso/issues/749
 startAppWithSavedState :: forall model action. (Eq model, FromJSON model, ToJSON model) => Miso.App model action -> JSM ()
@@ -440,3 +481,12 @@ nodeSelectionType =
             THole{} -> True
             TEmptyHole{} -> True
             _ -> False
+
+-- TODO add to `Foreword`, replacing unsafe `minimum`
+type Foldable1 = Data.Foldable1.Foldable1
+minimum :: (Foldable1 t) => t Double -> Double
+minimum = Data.Foldable1.minimum
+maximum :: (Foldable1 t) => t Double -> Double
+maximum = Data.Foldable1.maximum
+toNonEmpty :: (Foldable1 t) => t a -> NonEmpty a
+toNonEmpty = Data.Foldable1.toNonEmpty
