@@ -41,24 +41,7 @@ import           Linear
 import           Linear.Affine
 
 import Optics hiding (Empty)
-
-type P2 = Point V2
-
--- | The unit vector in the positive X direction.
-unitX :: (R1 v, Additive v, Num n) => v n
-unitX = zero & lensVL _x .~ 1
-
--- | The unit vector in the negative X direction.
--- unit_X :: (R1 v, Additive v, Num n) => v n
--- unit_X = zero & lensVL _x .~ (-1)
-
--- | The unit vector in the positive Y direction.
--- unitY :: (R2 v, Additive v, Num n) => v n
--- unitY = zero & lensVL _y .~ 1
-
--- | The unit vector in the negative Y direction.
-unit_Y :: (R2 v, Additive v, Num n) => v n
-unit_Y = zero & lensVL _y .~ (-1)
+import Util (P2, unitX, unit_Y)
 
 ------------------------------------------------------------
 --  Binary trees

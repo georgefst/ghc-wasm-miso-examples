@@ -34,6 +34,7 @@ executable ghc-wasm-miso-examples
       SimpleCounter
       Snake
       TodoMVC
+      Util
       XHR
     if arch(wasm32)
       build-depends: ghc-experimental, jsaddle-wasm
